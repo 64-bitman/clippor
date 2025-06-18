@@ -20,7 +20,7 @@ clean:
 	meson compile -C build/ --clean
 
 run: all
-	@GSETTINGS_SCHEMA_DIR=schemas/ LSAN_OPTIONS=suppressions=lsan_suppr.txt:fast_unwind_on_malloc=0:print_suppressions=0 \
+	@GSETTINGS_SCHEMA_DIR=schemas/ LSAN_OPTIONS=fast_unwind_on_malloc=0 \
 						 build/clippor --debug --server
 
 test:

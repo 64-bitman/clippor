@@ -29,7 +29,7 @@ void clippor_clipboard_new_entry(
 
 gboolean clippor_clipboard_add_client(
     ClipporClipboard *self, GObject *client, const gchar *label,
-    const gchar *property_name, const gchar *signal_name
+    ClipporSelectionType selection
 );
 
 ClipporEntry *

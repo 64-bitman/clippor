@@ -258,27 +258,41 @@ on_client_removal(
 }
 
 /*
- * Returns FALSE if client with label is already added. Does not create a new
- * reference for the client.
+ * Returns FALSE if client with label is already added.
  */
 gboolean
 clippor_clipboard_add_client(
     ClipporClipboard *self, GObject *client, const gchar *label,
-    const gchar *property_name, const gchar *signal_name
+    ClipporSelectionType selection
 )
 {
     g_return_val_if_fail(CLIPPOR_IS_CLIPBOARD(self), FALSE);
     g_return_val_if_fail(client != NULL, FALSE);
     g_return_val_if_fail(label != NULL, FALSE);
-    g_return_val_if_fail(property_name != NULL, FALSE);
-    g_return_val_if_fail(signal_name != NULL, FALSE);
+    g_return_val_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE, FALSE);
 
     if (g_hash_table_contains(self->clients, client))
         return FALSE;
 
     g_hash_table_insert(self->clients, g_strdup(label), g_object_ref(client));
 
-    gchar *detail = g_strdup_printf("notify::%s", property_name);
+    const gchar *property_name, *detail, *signal_name;
+
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+    {
+        property_name = "clipboard-regular";
+        detail = "notify::clipboard-regular";
+        signal_name = "selection::regular";
+    }
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+    {
+        property_name = "clipboard-primary";
+        detail = "notify::clipboard-primary";
+        signal_name = "selection::primary";
+    }
+    else
+        // Shouldn't happen
+        return FALSE;
 
     g_object_set(client, property_name, self, NULL);
     g_signal_connect(client, detail, G_CALLBACK(on_client_removal), self);
@@ -286,7 +300,6 @@ clippor_clipboard_add_client(
         client, signal_name, G_CALLBACK(on_client_selection), self
     );
 
-    g_free(detail);
     return TRUE;
 }
 

@@ -229,6 +229,7 @@ wayland_connection_finalize(GObject *object)
 
     if (self->active)
         wayland_connection_stop(self);
+
     g_free(self->display.name);
     g_hash_table_unref(self->gobjects.seats);
 
@@ -314,16 +315,49 @@ wayland_connection_flush(WaylandConnection *self, GError **error)
     g_return_val_if_fail(wayland_connection_is_active(self), FALSE);
     g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-    if (wl_display_flush(self->display.proxy) == -1)
-    {
-        g_set_error(
-            error, WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_FLUSH,
-            "Failed flushing Wayland requests for display '%s'",
-            self->display.name
-        );
-        return FALSE;
-    }
+    int ret;
+    GPollFD pfd = {.fd = wayland_connection_get_fd(self), .events = G_IO_OUT};
 
+    // Send the requests we have made to the compositor, until we have written
+    // all the data. Poll in order to check if the display fd is writable, if
+    // not, then wait until it is and continue writing or until we timeout.
+    while (errno = 0, TRUE)
+    {
+        ret = wl_display_flush(self->display.proxy);
+
+        if (ret >= 0)
+            break;
+
+        if (errno == EAGAIN)
+        {
+            ret = g_poll(&pfd, 1, self->timeout);
+
+            if (ret == 0)
+                g_set_error(
+                    error, WAYLAND_CONNECTION_ERROR,
+                    WAYLAND_CONNECTION_ERROR_TIMEOUT,
+                    "Timeout out while flushing Wayland display '%s'",
+                    self->display.name
+                );
+            else if (ret < 0)
+                g_set_error(
+                    error, WAYLAND_CONNECTION_ERROR,
+                    WAYLAND_CONNECTION_ERROR_FLUSH,
+                    "g_poll() failed while flushing Wayland display '%s': %s",
+                    self->display.name, g_strerror(errno)
+                );
+            else
+                continue;
+        }
+        else
+            g_set_error(
+                error, WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_FLUSH,
+                "Failed flushing Wayland display '%s': %s", self->display.name,
+                g_strerror(errno)
+            );
+
+        break;
+    }
     return TRUE;
 }
 
@@ -360,14 +394,28 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
     GPollFD fds = {.fd = wayland_connection_get_fd(self), .events = G_IO_IN};
 
     // Poll until there is data to read from the display fd.
-    if (g_poll(&fds, 1, self->timeout) <= 0)
+    ret = g_poll(&fds, 1, self->timeout);
+
+    if (ret <= 0)
     {
-        g_set_error(
-            error, WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_TIMEOUT,
-            "Timed out polling while dispatching Wayland events for display "
-            "'%s'",
-            self->display.name
-        );
+        if (ret == 0)
+            g_set_error(
+                error, WAYLAND_CONNECTION_ERROR,
+                WAYLAND_CONNECTION_ERROR_TIMEOUT,
+                "Timed out polling while dispatching Wayland events for "
+                "display "
+                "'%s'",
+                self->display.name
+            );
+        else
+            g_set_error(
+                error, WAYLAND_CONNECTION_ERROR,
+                WAYLAND_CONNECTION_ERROR_DISPATCH,
+                "g_poll() failed while dispatching Wayland events for display "
+                "'%s': %s",
+                self->display.name, g_strerror(errno)
+            );
+
         wl_display_cancel_read(self->display.proxy);
         return -1;
     }
@@ -611,6 +659,9 @@ wayland_connection_stop(WaylandConnection *self)
 
     g_debug("Disconnecting from Wayland display '%s'", self->display.name);
 
+    if (self->source != NULL)
+        wayland_connection_uninstall_source(self);
+
     // Remove seats if hash table exists
     if (self->gobjects.seats != NULL)
         g_hash_table_remove_all(self->gobjects.seats);
@@ -697,7 +748,8 @@ wl_registry_listener_global(
 
 /*
  * Don't do anything in order to avoid race conditions. Unless it is a seat then
- * remove it.
+ * unreference it, but it may still be referenced, so make the seat permanently
+ * inactive to indicate that the seat is now invalid. TODO
  */
 static void
 wl_registry_listener_global_remove(
@@ -715,7 +767,10 @@ wl_registry_listener_global_remove(
         WaylandSeat *seat = WAYLAND_SEAT(value);
 
         if (wayland_seat_get_numerical_name(seat) == name)
+        {
+            wayland_seat_destroy(seat);
             g_hash_table_iter_remove(&iter);
+        }
     }
 }
 
@@ -729,9 +784,10 @@ wayland_connection_get_fd(WaylandConnection *self)
 }
 
 /*
- * Returns NULL if no seats exist or if seat with name is not found. Does not
- * create a new reference of seat. If name is NULL or empty, $XDG_SEAT is used
- * else the first found seat is used then.
+ * Returns NULL if no seats exist. Does not create a new reference of seat. If
+ * name is NULL or empty, $XDG_SEAT is used. If $XDG_SEAT is not set or is a
+ * non-existent seat, then the first seat found is used instead.
+ *
  */
 WaylandSeat *
 wayland_connection_get_seat(WaylandConnection *self, const gchar *name)
@@ -751,11 +807,16 @@ wayland_connection_get_seat(WaylandConnection *self, const gchar *name)
     WaylandSeat *seat = NULL;
 
     if (name != NULL)
+    {
         seat = g_hash_table_lookup(self->gobjects.seats, name);
+        if (seat == NULL)
+            goto use_first;
+    }
     else
     {
         GHashTableIter iter;
 
+use_first:
         g_hash_table_iter_init(&iter, self->gobjects.seats);
         g_hash_table_iter_next(&iter, NULL, (void **)&seat);
     }
@@ -882,8 +943,6 @@ wayland_connection_source_finalize(GSource *source)
 
     if (ws->is_reading)
         wl_display_cancel_read(display);
-
-    g_object_unref(ws->ct);
 }
 
 static GSourceFuncs wayland_connection_source_funcs = {
@@ -912,8 +971,8 @@ wayland_connection_install_source(WaylandConnection *self)
     g_free(name);
 
     self->source = source;
-    ws->ct = g_object_ref(self);
-    ws->ct = g_object_ref(self);
+    ws->ct = self; // No need to create new reference because source is tied to
+                   // lifetime of ct.
 
     ws->is_invalid = ws->is_reading = FALSE;
 
@@ -923,7 +982,7 @@ wayland_connection_install_source(WaylandConnection *self)
     g_source_add_poll(source, &ws->pfd);
 
     // Set to highest priority so we will always at least be called before other
-    // non-wayland sources that may call Wayland functions.
+    // non-Wayland sources that may call Wayland functions.
     g_source_set_priority(source, G_MININT);
     g_source_attach(source, NULL);
 }
@@ -933,10 +992,8 @@ wayland_connection_uninstall_source(WaylandConnection *self)
 {
     g_return_if_fail(WAYLAND_IS_CONNECTION(self));
     g_return_if_fail(wayland_connection_is_active(self));
+    g_return_if_fail(self->source != NULL);
 
-    WaylandConnectionSource *ws = (WaylandConnectionSource *)self->source;
-
-    g_object_unref(ws->ct);
     g_source_destroy(self->source);
     g_source_unref(self->source);
     self->source = NULL;
@@ -1025,7 +1082,8 @@ wayland_data_device_manager_get_data_device(
 }
 
 WaylandDataSource *
-wayland_data_device_manager_create_data_source(WaylandDataDeviceManager *manager
+wayland_data_device_manager_create_data_source(
+    WaylandDataDeviceManager *manager
 )
 {
     g_return_val_if_fail(wayland_data_device_manager_is_valid(manager), NULL);
@@ -1114,7 +1172,7 @@ wayland_data_offer_destroy(WaylandDataOffer *offer)
     default:
         break;
     }
-    int32_t id = wl_proxy_get_id(offer->proxy);
+    uint32_t id = wl_proxy_get_id(offer->proxy);
 
     g_hash_table_remove(pending_offers, &id);
     g_ptr_array_unref(offer->mime_types);
@@ -1237,7 +1295,7 @@ wayland_data_device_event_data_offer_gen_handler(
 
     g_hash_table_insert(pending_offers, id, offer);
 
-    // 10 mime types is generally the norm from my experience.
+    // 10 mime types is generally the normal maximum from my experience.
     offer->mime_types = g_ptr_array_new_full(10, g_free);
 
     device->listener->data_offer(device->data, device, offer);

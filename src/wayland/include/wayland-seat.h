@@ -31,4 +31,5 @@ struct wl_seat *wayland_seat_get_proxy(WaylandSeat *self);
 
 gboolean wayland_seat_is_active(WaylandSeat *self);
 
+void wayland_seat_destroy(WaylandSeat *self);
 gboolean wayland_seat_set_status(WaylandSeat *self, gboolean active);

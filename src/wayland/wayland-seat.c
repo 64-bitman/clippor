@@ -74,6 +74,8 @@ static void selection_default_cb(WaylandSeat *self, GHashTable *mime_types);
 static void
 on_removed_from_clipboard(GObject *object, GObject *client, gpointer data);
 
+static void on_ct_dispose(gpointer data, GObject *object);
+
 static gboolean wayland_seat_start(WaylandSeat *self, GError **error);
 static void wayland_seat_stop(WaylandSeat *self);
 
@@ -127,9 +129,9 @@ wayland_seat_set_property(
         break;
     }
     case PROP_CONNECTION:
-        // Don't create a new reference to ct because then we will never able to
-        // free it via unreferencing without unreferencing its seats first.
+        // Don't create a new reference to ct because it will outlive us anyways
         self->ct = g_value_get_object(value);
+        g_object_weak_ref(G_OBJECT(self->ct), on_ct_dispose, self);
         break;
     case PROP_CLIPBOARD_PRIMARY:
         cb = &self->primary_cb;
@@ -144,6 +146,9 @@ cb_changed:
         if (*cb != NULL)
             g_object_unref(*cb);
         *cb = g_value_dup_object(value);
+
+        if (*cb == NULL)
+            return;
 
         // Update seat so it uses the selection for the most recent entry in the
         // new clipboard.
@@ -212,7 +217,9 @@ wayland_seat_finalize(GObject *object)
     WaylandSeat *self = WAYLAND_SEAT(object);
 
     g_free(self->name);
-    wl_seat_destroy(self->proxy);
+
+    if (self->proxy != NULL)
+        wl_seat_destroy(self->proxy);
 
     if (self->mime_types != NULL)
         g_ptr_array_unref(self->mime_types);
@@ -293,6 +300,14 @@ on_removed_from_clipboard(
         g_clear_object(&seat->regular_cb);
     else if (seat->primary_cb == CLIPPOR_CLIPBOARD(client))
         g_clear_object(&seat->primary_cb);
+}
+
+static void
+on_ct_dispose(gpointer data, GObject *object G_GNUC_UNUSED)
+{
+    WaylandSeat *seat = data;
+
+    wayland_seat_destroy(seat);
 }
 
 static void wl_seat_listener_capabilities(
@@ -466,9 +481,6 @@ wayland_seat_stop(WaylandSeat *self)
     g_return_if_fail(wayland_connection_is_active(self->ct));
     g_return_if_fail(wayland_seat_is_active(self));
 
-    g_return_if_fail(WAYLAND_IS_SEAT(self));
-    g_return_if_fail(wayland_seat_is_active(self));
-
     wayland_data_device_manager_unused(self->data_device_manager);
     wayland_data_device_destroy(self->data_device);
     wayland_data_source_destroy(self->data_source);
@@ -476,6 +488,23 @@ wayland_seat_stop(WaylandSeat *self)
     self->active = FALSE;
 
     wayland_connection_flush(self->ct, NULL);
+}
+
+/*
+ * Destroy the seat proxy, making the seat permanently inactive. Also removes it
+ * from any clipboards.
+ */
+void
+wayland_seat_destroy(WaylandSeat *self)
+{
+    g_return_if_fail(WAYLAND_IS_SEAT(self));
+
+    wayland_seat_set_status(self, FALSE);
+    wl_seat_destroy(self->proxy);
+    self->proxy = NULL;
+
+    g_object_set(self, "clipboard-regular", NULL, NULL);
+    g_object_set(self, "clipboard-primary", NULL, NULL);
 }
 
 /*
@@ -622,12 +651,12 @@ wayland_seat_set_selection(
 
     // Don't need to worry about possibly leaking the old data source if it
     // exists because the cancelled event will be called for it.
-    self->data_source =
-        wayland_data_device_manager_create_data_source(self->data_device_manager
-        );
+    self->data_source = wayland_data_device_manager_create_data_source(
+        self->data_device_manager
+    );
 
     wayland_data_source_add_listener(
-        self->data_source, &data_source_listener, g_object_ref(entry)
+        self->data_source, &data_source_listener, entry
     );
 
     GHashTable *mime_types = clippor_entry_get_mime_types(entry);
@@ -816,12 +845,16 @@ data_device_event_selection(
 static void
 data_device_event_finished(void *data, WaylandDataDevice *device)
 {
+    WaylandSeat *seat = data;
+
     wayland_data_device_destroy(device);
+    seat->data_device = NULL;
 }
 
 static void
 data_source_event_send(
-    void *data, WaylandDataSource *source, const char *mime_type, int32_t fd
+    void *data, WaylandDataSource *source G_GNUC_UNUSED, const char *mime_type,
+    int32_t fd
 )
 {
     GError *error = NULL;
@@ -840,8 +873,7 @@ data_source_event_send(
 }
 
 static void
-data_source_event_cancelled(void *data, WaylandDataSource *source)
+data_source_event_cancelled(void *data G_GNUC_UNUSED, WaylandDataSource *source)
 {
-    g_object_unref(data);
     wayland_data_source_destroy(source);
 }

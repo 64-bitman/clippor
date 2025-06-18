@@ -32,8 +32,8 @@ start_server(void)
     server->cb = clippor_clipboard_new("Untitled");
 
     clippor_clipboard_add_client(
-        server->cb, G_OBJECT(server->seat), "Test", "clipboard-regular",
-        "selection::regular"
+        server->cb, G_OBJECT(server->seat), "Test",
+        CLIPPOR_SELECTION_TYPE_REGULAR
     );
 
     g_unix_signal_add(SIGINT, on_sigint, server);
@@ -48,10 +48,9 @@ stop_server(ClipporServer *server)
 {
     g_main_loop_quit(server->loop);
 
-    wayland_connection_uninstall_source(server->ct);
-
-    g_object_unref(server->cb);
     g_object_unref(server->ct);
+    g_object_run_dispose(G_OBJECT(server->seat));
+    g_object_unref(server->cb);
 
     g_object_unref(server->settings);
 
