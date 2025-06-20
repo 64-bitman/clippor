@@ -7,17 +7,18 @@
 
 G_DECLARE_FINAL_TYPE(ClipporEntry, clippor_entry, CLIPPOR, ENTRY, GObject)
 
-ClipporEntry *clippor_entry_new(guint64 index, GObject *source_client);
+ClipporEntry *clippor_entry_new(guint64 index, GObject *from);
 
 guint64 clippor_entry_get_index(ClipporEntry *self);
 
-GObject *clippor_entry_get_source(ClipporEntry *self);
-
 GHashTable *clippor_entry_get_mime_types(ClipporEntry *self);
 
-gboolean
-clippor_entry_set_file(ClipporEntry *self, GFile *file, GError **error);
+GObject *clippor_entry_is_from(ClipporEntry *self);
 
 void clippor_entry_add_mime_type(
     ClipporEntry *self, const gchar *mime_type, GBytes *data
+);
+
+void clippor_entry_set_mime_types(
+    ClipporEntry *self, GHashTable *mime_types, gboolean take
 );

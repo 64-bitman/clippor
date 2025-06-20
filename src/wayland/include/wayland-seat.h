@@ -29,7 +29,10 @@ gchar *wayland_seat_get_name(WaylandSeat *self);
 guint32 wayland_seat_get_numerical_name(WaylandSeat *self);
 struct wl_seat *wayland_seat_get_proxy(WaylandSeat *self);
 
-gboolean wayland_seat_is_active(WaylandSeat *self);
-
-void wayland_seat_destroy(WaylandSeat *self);
-gboolean wayland_seat_set_status(WaylandSeat *self, gboolean active);
+GPtrArray *wayland_seat_clipboard_get_mime_types(
+    WaylandSeat *self, ClipporSelectionType selection
+);
+GBytes *wayland_seat_clipboard_receive_data(
+    WaylandSeat *self, ClipporSelectionType selection, const char *mime_type,
+    GError **error
+);

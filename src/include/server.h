@@ -14,7 +14,6 @@ typedef struct
     // Temporary
     ClipporClipboard *cb;
     WaylandConnection *ct;
-    WaylandSeat *seat;
 } ClipporServer;
 
 ClipporServer *start_server(void);

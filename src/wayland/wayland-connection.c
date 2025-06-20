@@ -54,24 +54,22 @@ typedef struct
 {
     GSource source;
 
-    WaylandConnection *ct;
+    GWeakRef ct;
     GPollFD pfd;
     gboolean is_reading;
-    gboolean is_invalid;
 } WaylandConnectionSource;
 
 struct _WaylandConnection
 {
     GObject parent;
 
-    gboolean active;
     guint timeout; // In milliseconds
 
     GSource *source;
     struct
     {
         struct wl_display *proxy;
-        gchar *name; // May be NULL
+        gchar *name;
     } display;
 
     struct
@@ -88,6 +86,8 @@ struct _WaylandConnection
         struct zwlr_data_control_manager_v1 *zwlr_data_control_manager_v1;
         struct zwp_virtual_keyboard_manager_v1 *zwp_virtual_keyboard_manager_v1;
     } gobjects;
+
+    gboolean active;
 };
 
 G_DEFINE_TYPE(WaylandConnection, wayland_connection, G_TYPE_OBJECT)
@@ -95,9 +95,7 @@ G_DEFINE_TYPE(WaylandConnection, wayland_connection, G_TYPE_OBJECT)
 typedef enum
 {
     PROP_DISPLAY = 1, // An empty string is equivalent to passing NULL
-    PROP_SEATS,       // This is populated when connection is started
     PROP_TIMEOUT,
-    PROP_ACTIVE,
     N_PROPERTIES
 } WaylandConnectionProperty;
 
@@ -106,8 +104,21 @@ static GParamSpec *obj_properties[N_PROPERTIES] = {
 };
 
 static gboolean
-wayland_connection_start(WaylandConnection *self, GError **error);
-static void wayland_connection_stop(WaylandConnection *self);
+wayland_connection_setup(WaylandConnection *self, GError **error);
+static void wayland_connection_unsetup(WaylandConnection *self);
+
+static void wl_registry_listener_global(
+    void *data, struct wl_registry *registry, uint32_t name,
+    const char *interface, uint32_t version
+);
+static void wl_registry_listener_global_remove(
+    void *data, struct wl_registry *registry, uint32_t name
+);
+
+static struct wl_registry_listener wl_registry_listener = {
+    .global = wl_registry_listener_global,
+    .global_remove = wl_registry_listener_global_remove,
+};
 
 static void
 wayland_connection_set_property(
@@ -123,60 +134,15 @@ wayland_connection_set_property(
     {
         const gchar *display = g_value_get_string(value);
 
-        if (g_strcmp0(display, "") == 0)
-        {
-            g_free(self->display.name);
-            self->display.name = g_strdup(g_getenv("WAYLAND_DISPLAY"));
-        }
-        else if (g_strcmp0(display, self->display.name) != 0)
-        {
-            g_free(self->display.name);
-            self->display.name = g_value_dup_string(value);
-        }
+        if (display == NULL || g_strcmp0(display, "") == 0)
+            display = g_getenv("WAYLAND_DISPLAY");
 
-        // Reinitialize connection if already active
-        if (!self->active)
-            break;
-
-        wayland_connection_set_status(self, FALSE);
-
-        if (!wayland_connection_set_status(self, TRUE))
-            g_info(
-                "Could not reconnect to Wayland display '%s'",
-                self->display.name
-            );
-
+        self->display.name = g_strdup(display);
         break;
     }
     case PROP_TIMEOUT:
         self->timeout = g_value_get_uint(value);
         break;
-    case PROP_ACTIVE:
-    {
-        gboolean new = g_value_get_boolean(value);
-
-        if (new == self->active)
-            break;
-
-        if (new)
-        {
-            if (!wayland_connection_start(self, &error))
-            {
-                g_assert(error != NULL);
-                g_info(
-                    "Failed starting wayland connection for display '%s': %s",
-                    self->display.name, error->message
-                );
-            }
-        }
-        else
-        {
-            wayland_connection_stop(self);
-            g_assert(error == NULL);
-        }
-
-        break;
-    }
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
         break;
@@ -197,14 +163,8 @@ wayland_connection_get_property(
     case PROP_DISPLAY:
         g_value_set_string(value, self->display.name);
         break;
-    case PROP_SEATS:
-        g_value_set_boxed(value, self->gobjects.seats);
-        break;
     case PROP_TIMEOUT:
         g_value_set_uint(value, self->timeout);
-        break;
-    case PROP_ACTIVE:
-        g_value_set_boolean(value, self->active);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -219,6 +179,8 @@ wayland_connection_dispose(GObject *object)
 
     g_hash_table_remove_all(self->gobjects.seats);
 
+    wayland_connection_uninstall_source(self);
+
     G_OBJECT_CLASS(wayland_connection_parent_class)->dispose(object);
 }
 
@@ -227,11 +189,9 @@ wayland_connection_finalize(GObject *object)
 {
     WaylandConnection *self = WAYLAND_CONNECTION(object);
 
-    if (self->active)
-        wayland_connection_stop(self);
-
     g_free(self->display.name);
     g_hash_table_unref(self->gobjects.seats);
+    wayland_connection_unsetup(self);
 
     G_OBJECT_CLASS(wayland_connection_parent_class)->finalize(object);
 }
@@ -253,18 +213,10 @@ wayland_connection_class_init(WaylandConnectionClass *class)
         "display", "Display name", "Name of connected Wayland display", "",
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
-    obj_properties[PROP_SEATS] = g_param_spec_boxed(
-        "seats", "Seats", "List of seats available for Wayland display",
-        G_TYPE_HASH_TABLE, G_PARAM_READABLE
-    );
     obj_properties[PROP_TIMEOUT] = g_param_spec_uint(
         "timeout", "Timeout",
         "Timeout to determine if Wayland connection is unresponsive", 0,
         G_MAXUINT, 1500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
-    );
-    obj_properties[PROP_ACTIVE] = g_param_spec_boolean(
-        "active", "Active", "If connection is active", FALSE,
-        G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
 
     g_object_class_install_properties(
@@ -277,21 +229,34 @@ wayland_connection_class_init(WaylandConnectionClass *class)
 static void
 wayland_connection_init(WaylandConnection *self)
 {
-    // Don't free the key since that will be freed once the seat is removed
+    // Don't free the key since that is owned by the WaylandSeat
     self->gobjects.seats =
         g_hash_table_new_full(g_str_hash, g_str_equal, NULL, g_object_unref);
 }
 
 /*
- * If display is an empty string, NULL will be passed to wl_display_connect().
+ * If display is NULL or an empty string, $WAYLAND_DISPLAY will be used
  */
 WaylandConnection *
-wayland_connection_new(const gchar *display)
+wayland_connection_new(const gchar *display_name, GError **error)
 {
-    g_return_val_if_fail(display != NULL, NULL);
+    g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
     WaylandConnection *ct =
-        g_object_new(WAYLAND_TYPE_CONNECTION, "display", display, NULL);
+        g_object_new(WAYLAND_TYPE_CONNECTION, "display", display_name, NULL);
+
+    if (!wayland_connection_setup(ct, error))
+    {
+        g_assert(error == NULL || error != NULL);
+
+        g_prefix_error(
+            error, "Failed connecting to Wayland display '%s': ", display_name
+        );
+
+        g_object_unref(ct);
+
+        return NULL;
+    }
 
     return ct;
 }
@@ -303,16 +268,216 @@ wl_log_handler(const char *fmt, va_list args)
         WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_PROTOCOL, fmt, args
     );
 
-    g_critical("Wayland protocol error: '%s'", error->message);
+    g_warning("Wayland protocol error: '%s'", error->message);
 
     g_error_free(error);
+}
+
+static gboolean
+wayland_connection_setup(WaylandConnection *self, GError **error)
+{
+    g_assert(WAYLAND_IS_CONNECTION(self));
+    g_assert(error == NULL || *error == NULL);
+
+    struct wl_display *display = wl_display_connect(self->display.name);
+
+    if (display == NULL)
+    {
+        g_set_error_literal(
+            error, WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_CONNECT,
+            "No such display exists"
+        );
+        return FALSE;
+    }
+
+    struct wl_registry *registry = wl_display_get_registry(display);
+
+    wl_registry_add_listener(registry, &wl_registry_listener, self);
+
+    self->display.proxy = display;
+    self->registry.proxy = registry;
+
+    if (!wayland_connection_roundtrip(self, error))
+    {
+        wayland_connection_unsetup(self);
+        return FALSE;
+    }
+
+    self->active = TRUE;
+    return TRUE;
+}
+
+static void
+wayland_connection_unsetup(WaylandConnection *self)
+{
+    g_assert(WAYLAND_IS_CONNECTION(self));
+
+    if (!self->active)
+        return;
+
+    // Remove global objects
+    if (self->gobjects.ext_data_control_manager_v1 != NULL)
+        ext_data_control_manager_v1_destroy(
+            self->gobjects.ext_data_control_manager_v1
+        );
+
+    if (self->gobjects.zwlr_data_control_manager_v1 != NULL)
+        zwlr_data_control_manager_v1_destroy(
+            self->gobjects.zwlr_data_control_manager_v1
+        );
+
+    if (self->gobjects.zwp_virtual_keyboard_manager_v1 != NULL)
+        zwp_virtual_keyboard_manager_v1_destroy(
+            self->gobjects.zwp_virtual_keyboard_manager_v1
+        );
+
+    // Disconnect display
+    wl_registry_destroy(self->registry.proxy);
+    wl_display_disconnect(self->display.proxy);
+    self->active = FALSE;
+}
+
+/*
+ * Sync with wayland_connection_stop()
+ */
+static void
+wl_registry_listener_global(
+    void *data, struct wl_registry *registry, uint32_t name,
+    const char *interface, uint32_t version
+)
+{
+    WaylandConnection *ct = data;
+
+    if (g_strcmp0(interface, ext_data_control_manager_v1_interface.name) == 0)
+        ct->gobjects.ext_data_control_manager_v1 = wl_registry_bind(
+            registry, name, &ext_data_control_manager_v1_interface, 1
+        );
+    else if (g_strcmp0(
+                 interface, zwlr_data_control_manager_v1_interface.name
+             ) == 0)
+        ct->gobjects.zwlr_data_control_manager_v1 = wl_registry_bind(
+            registry, name, &zwlr_data_control_manager_v1_interface, version
+        );
+    else if (g_strcmp0(
+                 interface, zwp_virtual_keyboard_manager_v1_interface.name
+             ) == 0)
+        ct->gobjects.zwp_virtual_keyboard_manager_v1 = wl_registry_bind(
+            registry, name, &zwp_virtual_keyboard_manager_v1_interface, 1
+        );
+    else if (g_strcmp0(interface, wl_seat_interface.name) == 0)
+    {
+        struct wl_seat *seat =
+            wl_registry_bind(registry, name, &wl_seat_interface, 2);
+
+        GError *error = NULL;
+        WaylandSeat *obj = wayland_seat_new(ct, seat, name, &error);
+
+        if (obj == NULL)
+        {
+            g_assert(error != NULL);
+            wl_seat_destroy(seat);
+            return;
+        }
+        g_hash_table_insert(
+            ct->gobjects.seats, wayland_seat_get_name(obj), obj
+        );
+    }
+    else
+        return;
+}
+
+/*
+ * Don't do anything in order to avoid race conditions. Unless it is a seat then
+ * unreference it.
+ */
+static void
+wl_registry_listener_global_remove(
+    void *data, struct wl_registry *registry G_GNUC_UNUSED, uint32_t name
+)
+{
+    WaylandConnection *ct = data;
+    GHashTableIter iter;
+    gpointer key, value;
+
+    g_hash_table_iter_init(&iter, ct->gobjects.seats);
+
+    while (g_hash_table_iter_next(&iter, &key, &value))
+    {
+        WaylandSeat *seat = WAYLAND_SEAT(value);
+
+        if (wayland_seat_get_numerical_name(seat) == name)
+            g_hash_table_iter_remove(&iter);
+    }
+}
+
+gint
+wayland_connection_get_fd(WaylandConnection *self)
+{
+    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), -1);
+
+    return wl_display_get_fd(self->display.proxy);
+}
+
+/*
+ * Returns NULL if no seats exist. Does not create a new reference of seat. If
+ * name is NULL or empty, $XDG_SEAT is used. If $XDG_SEAT is not set or is a
+ * non-existent seat, then the first seat found is used instead.
+ *
+ */
+WaylandSeat *
+wayland_connection_get_seat(WaylandConnection *self, const gchar *name)
+{
+    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
+
+    if (name == NULL || g_strcmp0(name, "") == 0)
+    {
+        const gchar *xdgseat = g_getenv("XDG_SEAT");
+
+        if (xdgseat != NULL)
+            name = xdgseat;
+        else
+            name = NULL;
+    }
+    WaylandSeat *seat = NULL;
+
+    if (name != NULL)
+    {
+        seat = g_hash_table_lookup(self->gobjects.seats, name);
+        if (seat == NULL)
+            goto use_first;
+    }
+    else
+    {
+        GHashTableIter iter;
+
+use_first:
+        g_hash_table_iter_init(&iter, self->gobjects.seats);
+        g_hash_table_iter_next(&iter, NULL, (void **)&seat);
+    }
+
+    return seat;
+}
+
+gchar *
+wayland_connection_get_display_name(WaylandConnection *self)
+{
+    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
+
+    return self->display.name;
+}
+
+struct wl_display *
+wayland_connection_get_display(WaylandConnection *self)
+{
+    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
+
+    return self->display.proxy;
 }
 
 gboolean
 wayland_connection_flush(WaylandConnection *self, GError **error)
 {
     g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-    g_return_val_if_fail(wayland_connection_is_active(self), FALSE);
     g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
     int ret;
@@ -365,7 +530,6 @@ gint
 wayland_connection_dispatch(WaylandConnection *self, GError **error)
 {
     g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-    g_return_val_if_fail(wayland_connection_is_active(self), FALSE);
     g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
     int num, ret = 0;
 
@@ -472,7 +636,6 @@ gboolean
 wayland_connection_roundtrip(WaylandConnection *self, GError **error)
 {
     g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-    g_return_val_if_fail(wayland_connection_is_active(self), FALSE);
     g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
     struct wl_callback *callback;
@@ -541,313 +704,16 @@ wayland_connection_roundtrip(WaylandConnection *self, GError **error)
     return TRUE;
 }
 
-/*
- * Also calls WAYLAND_IS_CONNECTION()
- */
-gboolean
-wayland_connection_is_active(WaylandConnection *self)
-{
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-    return self->active;
-}
-
-/*
- * Make connection active or inactive, returns FALSE if an error occured while
- * connecting
- */
-gboolean
-wayland_connection_set_status(WaylandConnection *self, gboolean active)
-{
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-
-    g_object_set(self, "active", active, NULL);
-
-    if (active != self->active)
-        return FALSE;
-    return TRUE;
-}
-
-/*
- * Returns FALSE on error
- */
-gboolean
-wayland_connection_set_display(WaylandConnection *self, const gchar *display)
-{
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-
-    gboolean old = self->active;
-
-    g_object_set(self, "display", display, NULL);
-
-    if (old != self->active)
-        return FALSE;
-    return TRUE;
-}
-
-static void wl_registry_listener_global(
-    void *data, struct wl_registry *registry, uint32_t name,
-    const char *interface, uint32_t version
-);
-static void wl_registry_listener_global_remove(
-    void *data, struct wl_registry *registry, uint32_t name
-);
-
-static struct wl_registry_listener wl_registry_listener = {
-    .global = wl_registry_listener_global,
-    .global_remove = wl_registry_listener_global_remove,
-};
-
-/*
- * Connect to Wayland display that was given to *self. Only connects to the
- * display and gets initial set of global objects. Should never be called
- * directly, use the GObject property instead.
- */
-static gboolean
-wayland_connection_start(WaylandConnection *self, GError **error)
-{
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-    g_return_val_if_fail(!wayland_connection_is_active(self), FALSE);
-    g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
-
-    self->display.proxy = wl_display_connect(self->display.name);
-
-    if (self->display.proxy == NULL)
-    {
-        g_set_error(
-            error, WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_CONNECT,
-            "Failed connecting to Wayland display '%s'", self->display.name
-        );
-        return FALSE;
-    }
-    g_debug("Starting Wayland connection for display '%s'", self->display.name);
-
-    self->registry.proxy = wl_display_get_registry(self->display.proxy);
-
-    wl_registry_add_listener(self->registry.proxy, &wl_registry_listener, self);
-
-    self->active = TRUE;
-
-    // Get initial set of globals.
-    if (!wayland_connection_roundtrip(self, error))
-    {
-        g_assert(error == NULL || *error != NULL);
-        g_prefix_error_literal(error, "Cannot get Wayland global objects: ");
-
-        wl_registry_destroy(self->registry.proxy);
-        wl_display_disconnect(self->display.proxy);
-        self->active = FALSE;
-
-        return FALSE;
-    }
-    g_assert(error == NULL || *error == NULL);
-
-    return TRUE;
-}
-
-/*
- * Disconnect Wayland connection. Does not destroy the GObject, meaning
- * wayland_connection_start() can be called after this to reinit the connection.
- * Does not free any properties of the GObject, only just destroys Wayland
- * specific resources. Connection must also be active. Should never be called
- * directly, use the GObject property instead.
- */
-static void
-wayland_connection_stop(WaylandConnection *self)
-{
-    g_return_if_fail(WAYLAND_IS_CONNECTION(self));
-    g_return_if_fail(wayland_connection_is_active(self));
-
-    g_debug("Disconnecting from Wayland display '%s'", self->display.name);
-
-    if (self->source != NULL)
-        wayland_connection_uninstall_source(self);
-
-    // Remove seats if hash table exists
-    if (self->gobjects.seats != NULL)
-        g_hash_table_remove_all(self->gobjects.seats);
-
-    // Set to NULL so that we know it is invalid in case we connect and
-    // disconnect after this.
-    if (self->gobjects.ext_data_control_manager_v1 != NULL)
-    {
-        ext_data_control_manager_v1_destroy(
-            self->gobjects.ext_data_control_manager_v1
-        );
-        self->gobjects.ext_data_control_manager_v1 = NULL;
-    }
-    if (self->gobjects.zwlr_data_control_manager_v1 != NULL)
-    {
-        zwlr_data_control_manager_v1_destroy(
-            self->gobjects.zwlr_data_control_manager_v1
-        );
-        self->gobjects.zwlr_data_control_manager_v1 = NULL;
-    }
-    if (self->gobjects.zwp_virtual_keyboard_manager_v1 != NULL)
-    {
-        zwp_virtual_keyboard_manager_v1_destroy(
-            self->gobjects.zwp_virtual_keyboard_manager_v1
-        );
-        self->gobjects.zwp_virtual_keyboard_manager_v1 = NULL;
-    }
-
-    wl_registry_destroy(self->registry.proxy);
-    wl_display_disconnect(self->display.proxy);
-
-    self->active = FALSE;
-}
-
-/*
- * Sync with wayland_connection_stop()
- */
-static void
-wl_registry_listener_global(
-    void *data, struct wl_registry *registry, uint32_t name,
-    const char *interface, uint32_t version
-)
-{
-    WaylandConnection *ct = data;
-
-    if (g_strcmp0(interface, ext_data_control_manager_v1_interface.name) == 0)
-        ct->gobjects.ext_data_control_manager_v1 = wl_registry_bind(
-            registry, name, &ext_data_control_manager_v1_interface, 1
-        );
-    else if (g_strcmp0(
-                 interface, zwlr_data_control_manager_v1_interface.name
-             ) == 0)
-        ct->gobjects.zwlr_data_control_manager_v1 = wl_registry_bind(
-            registry, name, &zwlr_data_control_manager_v1_interface, version
-        );
-    else if (g_strcmp0(
-                 interface, zwp_virtual_keyboard_manager_v1_interface.name
-             ) == 0)
-        ct->gobjects.zwp_virtual_keyboard_manager_v1 = wl_registry_bind(
-            registry, name, &zwp_virtual_keyboard_manager_v1_interface, 1
-        );
-    else if (g_strcmp0(interface, wl_seat_interface.name) == 0)
-    {
-        struct wl_seat *seat =
-            wl_registry_bind(registry, name, &wl_seat_interface, 2);
-
-        GError *error = NULL;
-        WaylandSeat *obj = wayland_seat_new(ct, seat, name, &error);
-
-        if (error != NULL)
-        {
-            wl_seat_destroy(seat);
-            return;
-        }
-        g_hash_table_insert(
-            ct->gobjects.seats, wayland_seat_get_name(obj), obj
-        );
-    }
-    else
-        return;
-
-    g_debug("Binded to Wayland global object interface '%s'", interface);
-}
-
-/*
- * Don't do anything in order to avoid race conditions. Unless it is a seat then
- * unreference it, but it may still be referenced, so make the seat permanently
- * inactive to indicate that the seat is now invalid. TODO
- */
-static void
-wl_registry_listener_global_remove(
-    void *data, struct wl_registry *registry G_GNUC_UNUSED, uint32_t name
-)
-{
-    WaylandConnection *ct = data;
-    GHashTableIter iter;
-    gpointer key, value;
-
-    g_hash_table_iter_init(&iter, ct->gobjects.seats);
-
-    while (g_hash_table_iter_next(&iter, &key, &value))
-    {
-        WaylandSeat *seat = WAYLAND_SEAT(value);
-
-        if (wayland_seat_get_numerical_name(seat) == name)
-        {
-            wayland_seat_destroy(seat);
-            g_hash_table_iter_remove(&iter);
-        }
-    }
-}
-
-gint
-wayland_connection_get_fd(WaylandConnection *self)
-{
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), -1);
-    g_return_val_if_fail(wayland_connection_is_active(self), -1);
-
-    return wl_display_get_fd(self->display.proxy);
-}
-
-/*
- * Returns NULL if no seats exist. Does not create a new reference of seat. If
- * name is NULL or empty, $XDG_SEAT is used. If $XDG_SEAT is not set or is a
- * non-existent seat, then the first seat found is used instead.
- *
- */
-WaylandSeat *
-wayland_connection_get_seat(WaylandConnection *self, const gchar *name)
-{
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
-    g_return_val_if_fail(wayland_connection_is_active(self), NULL);
-
-    if (name == NULL || g_strcmp0(name, "") == 0)
-    {
-        const gchar *xdgseat = g_getenv("XDG_SEAT");
-
-        if (xdgseat != NULL)
-            name = xdgseat;
-        else
-            name = NULL;
-    }
-    WaylandSeat *seat = NULL;
-
-    if (name != NULL)
-    {
-        seat = g_hash_table_lookup(self->gobjects.seats, name);
-        if (seat == NULL)
-            goto use_first;
-    }
-    else
-    {
-        GHashTableIter iter;
-
-use_first:
-        g_hash_table_iter_init(&iter, self->gobjects.seats);
-        g_hash_table_iter_next(&iter, NULL, (void **)&seat);
-    }
-
-    return seat;
-}
-
-gchar *
-wayland_connection_get_display_name(WaylandConnection *self)
-{
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
-
-    return self->display.name;
-}
-
-struct wl_display *
-wayland_connection_get_display(WaylandConnection *self)
-{
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
-    g_return_val_if_fail(wayland_connection_is_active(self), NULL);
-
-    return self->display.proxy;
-}
-
 static gboolean
 wayland_connection_source_prepare(GSource *source, gint *timeout_)
 {
     WaylandConnectionSource *ws = (WaylandConnectionSource *)source;
-    struct wl_display *display = wayland_connection_get_display(ws->ct);
+    WaylandConnection *ct = g_weak_ref_get(&ws->ct);
+    struct wl_display *display = wayland_connection_get_display(ct);
+    GError *error = NULL;
 
     *timeout_ = -1;
+    g_object_unref(ct);
 
     // If -1 is returned then there are still events in the queue to be
     // dispatched.
@@ -856,11 +722,12 @@ wayland_connection_source_prepare(GSource *source, gint *timeout_)
 
     ws->is_reading = TRUE;
 
-    if (!wayland_connection_flush(ws->ct, NULL))
-        g_info(
-            "Failed flushing Wayland display '%s'",
-            wayland_connection_get_display_name(ws->ct)
-        );
+    if (!wayland_connection_flush(ct, &error))
+    {
+        g_assert(error != NULL);
+        g_message("Failed prepare: %s", error->message);
+        g_error_free(error);
+    }
 
     return FALSE;
 }
@@ -869,32 +736,30 @@ static gboolean
 wayland_connection_source_check(GSource *source)
 {
     WaylandConnectionSource *ws = (WaylandConnectionSource *)source;
-    struct wl_display *display = wayland_connection_get_display(ws->ct);
+    WaylandConnection *ct = g_weak_ref_get(&ws->ct);
+    struct wl_display *display = wayland_connection_get_display(ct);
 
     ws->is_reading = FALSE;
+    g_object_unref(ct);
 
     if (ws->pfd.revents & (G_IO_ERR | G_IO_HUP | G_IO_NVAL))
     {
         wl_display_cancel_read(display);
-        g_info(
+        g_debug(
             "Wayland display '%s' closed",
-            wayland_connection_get_display_name(ws->ct)
+            wayland_connection_get_display_name(ct)
         );
-        ws->is_invalid = TRUE;
-
-        // Still dispatch so we can remove the source
-        return TRUE;
+        goto fail;
     }
     if (ws->pfd.revents & G_IO_IN)
     {
         if (wl_display_read_events(display) == -1)
         {
-            g_info(
+            g_message(
                 "Failed reading events on Wayland display '%s'",
-                wayland_connection_get_display_name(ws->ct)
+                wayland_connection_get_display_name(ct)
             );
-            ws->is_invalid = TRUE;
-            return TRUE;
+            goto fail;
         }
     }
     else
@@ -907,6 +772,14 @@ wayland_connection_source_check(GSource *source)
     }
 
     return TRUE;
+fail:
+    // Make the object inert
+    wayland_connection_uninstall_source(ct);
+    g_hash_table_remove_all(ct->gobjects.seats);
+    wayland_connection_unsetup(ct);
+
+    g_object_unref(ct);
+    return FALSE;
 }
 
 static gboolean
@@ -915,16 +788,16 @@ wayland_connection_source_dispatch(
 )
 {
     WaylandConnectionSource *ws = (WaylandConnectionSource *)source;
-    struct wl_display *display = wayland_connection_get_display(ws->ct);
+    WaylandConnection *ct = g_weak_ref_get(&ws->ct);
+    struct wl_display *display = wayland_connection_get_display(ct);
 
-    if (ws->is_invalid)
-        return G_SOURCE_REMOVE;
+    g_object_unref(ct);
 
     if (wl_display_dispatch_pending(display) == -1)
     {
-        g_info(
+        g_message(
             "Failed dispatching events for Wayland display '%s'",
-            wayland_connection_get_display_name(ws->ct)
+            wayland_connection_get_display_name(ct)
         );
         return G_SOURCE_REMOVE;
     }
@@ -939,10 +812,18 @@ static void
 wayland_connection_source_finalize(GSource *source)
 {
     WaylandConnectionSource *ws = (WaylandConnectionSource *)source;
-    struct wl_display *display = wayland_connection_get_display(ws->ct);
+    WaylandConnection *ct = g_weak_ref_get(&ws->ct);
+
+    if (ct == NULL)
+        return;
+
+    struct wl_display *display = wayland_connection_get_display(ct);
 
     if (ws->is_reading)
         wl_display_cancel_read(display);
+
+    g_object_unref(ct);
+    g_weak_ref_clear(&ws->ct);
 }
 
 static GSourceFuncs wayland_connection_source_funcs = {
@@ -953,10 +834,11 @@ static GSourceFuncs wayland_connection_source_funcs = {
 };
 
 void
-wayland_connection_install_source(WaylandConnection *self)
+wayland_connection_install_source(
+    WaylandConnection *self, GMainContext *context
+)
 {
     g_return_if_fail(WAYLAND_IS_CONNECTION(self));
-    g_return_if_fail(wayland_connection_is_active(self));
     g_return_if_fail(self->source == NULL);
 
     GSource *source = g_source_new(
@@ -971,10 +853,13 @@ wayland_connection_install_source(WaylandConnection *self)
     g_free(name);
 
     self->source = source;
-    ws->ct = self; // No need to create new reference because source is tied to
-                   // lifetime of ct.
 
-    ws->is_invalid = ws->is_reading = FALSE;
+    // Don't create a strong ref because then we can't finalize
+    // WaylandConnection, but create a weak one since the source finalize
+    // callback may come after the WaylandConnection was finalized.
+    g_weak_ref_init(&ws->ct, self);
+
+    ws->is_reading = FALSE;
 
     ws->pfd.fd = wayland_connection_get_fd(self);
     ws->pfd.events = G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL;
@@ -984,18 +869,27 @@ wayland_connection_install_source(WaylandConnection *self)
     // Set to highest priority so we will always at least be called before other
     // non-Wayland sources that may call Wayland functions.
     g_source_set_priority(source, G_MININT);
-    g_source_attach(source, NULL);
+    g_source_attach(source, context);
 }
 
 void
 wayland_connection_uninstall_source(WaylandConnection *self)
 {
     g_return_if_fail(WAYLAND_IS_CONNECTION(self));
-    g_return_if_fail(wayland_connection_is_active(self));
-    g_return_if_fail(self->source != NULL);
+
+    if (self->source == NULL)
+        return;
+
+    WaylandConnectionSource *ws = (WaylandConnectionSource *)self->source;
+
+    // Make sure we have cancelled any reads, the WaylandConnection may be
+    // finalized before the source finalize callback is called.
+    if (ws->is_reading)
+        wl_display_cancel_read(self->display.proxy);
 
     g_source_destroy(self->source);
     g_source_unref(self->source);
+
     self->source = NULL;
 }
 
@@ -1003,7 +897,6 @@ WaylandDataDeviceManager *
 wayland_connection_get_data_device_manager(WaylandConnection *self)
 {
     g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
-    g_return_val_if_fail(wayland_connection_is_active(self), NULL);
 
     WaylandDataDeviceManager *manager = g_new(WaylandDataDeviceManager, 1);
 
@@ -1029,6 +922,8 @@ wayland_connection_get_data_device_manager(WaylandConnection *self)
 void
 wayland_data_device_manager_unused(WaylandDataDeviceManager *manager)
 {
+    if (manager == NULL)
+        return;
     // Don't destroy the actual data device manager proxy because we can't just
     // obtain that again without reconnecting.
     g_free(manager);
@@ -1114,8 +1009,8 @@ wayland_data_device_manager_create_data_source(
 static WaylandDataOffer *
 wayland_data_offer_create_wrapper(void *proxy, WaylandDataProtocol protocol)
 {
-    g_return_val_if_fail(proxy != NULL, NULL);
-    g_return_val_if_fail(protocol != WAYLAND_DATA_PROTOCOL_NONE, NULL);
+    g_assert(proxy != NULL);
+    g_assert(protocol != WAYLAND_DATA_PROTOCOL_NONE);
 
     WaylandDataOffer *offer = g_new0(WaylandDataOffer, 1);
 
@@ -1127,7 +1022,7 @@ wayland_data_offer_create_wrapper(void *proxy, WaylandDataProtocol protocol)
 
 // Each key is the offer object id and its value is the WaylandDataOffer
 // structure. This hash table is used to store/transfer offers in between the
-// data_offer, offer, and selection events.
+// data_offer, off_clier, and selection events.
 static GHashTable *pending_offers = NULL;
 
 #define WAYLAND_DATA_PROXY_DESTROY(type, structure)                            \
@@ -1186,22 +1081,20 @@ wayland_data_device_set_seletion(
 )
 {
     g_return_if_fail(wayland_data_device_is_valid(device));
-    g_return_if_fail(wayland_data_source_is_valid(source));
+    g_return_if_fail(source == NULL || wayland_data_source_is_valid(source));
     g_return_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE);
+
+    void *proxy = source == NULL ? NULL : source->proxy;
 
     if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
     {
         switch (device->protocol)
         {
         case WAYLAND_DATA_PROTOCOL_EXT:
-            ext_data_control_device_v1_set_selection(
-                device->proxy, source->proxy
-            );
+            ext_data_control_device_v1_set_selection(device->proxy, proxy);
             break;
         case WAYLAND_DATA_PROTOCOL_WLR:
-            zwlr_data_control_device_v1_set_selection(
-                device->proxy, source->proxy
-            );
+            zwlr_data_control_device_v1_set_selection(device->proxy, proxy);
             break;
         default:
             break;
@@ -1213,12 +1106,12 @@ wayland_data_device_set_seletion(
         {
         case WAYLAND_DATA_PROTOCOL_EXT:
             ext_data_control_device_v1_set_primary_selection(
-                device->proxy, source->proxy
+                device->proxy, proxy
             );
             break;
         case WAYLAND_DATA_PROTOCOL_WLR:
             zwlr_data_control_device_v1_set_primary_selection(
-                device->proxy, source->proxy
+                device->proxy, proxy
             );
             break;
         default:
@@ -1273,7 +1166,6 @@ wayland_data_device_event_data_offer_gen_handler(
     WaylandDataDevice *device, void *offer_proxy
 )
 {
-
     WaylandDataOffer *offer =
         wayland_data_offer_create_wrapper(offer_proxy, device->protocol);
 
@@ -1287,13 +1179,14 @@ wayland_data_device_event_data_offer_gen_handler(
         // No destroy function for WaylandDataOffer because that has its own
         // destroy function which will remove itself from the hash table.
         pending_offers =
-            g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
+            g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, NULL);
 
-    uint32_t *id = g_malloc(sizeof(uint32_t));
+    uint32_t id = wl_proxy_get_id(offer_proxy);
 
-    *id = wl_proxy_get_id(offer_proxy);
-
-    g_hash_table_insert(pending_offers, id, offer);
+    // When I used g_int64_hash and alloced memory, if alot of stuff was copied,
+    // sometimes the hash_function won't match and lookup would return NULL.
+    // Using a direct hash seems to avoid this.
+    g_hash_table_insert(pending_offers, GINT_TO_POINTER(id), offer);
 
     // 10 mime types is generally the normal maximum from my experience.
     offer->mime_types = g_ptr_array_new_full(10, g_free);
@@ -1313,9 +1206,10 @@ wayland_data_device_event_selection_gen_handler(
     }
 
     uint32_t id = wl_proxy_get_id(offer_proxy);
-    WaylandDataOffer *offer = g_hash_table_lookup(pending_offers, &id);
+    WaylandDataOffer *offer =
+        g_hash_table_lookup(pending_offers, GINT_TO_POINTER(id));
 
-    g_return_if_fail(offer != NULL);
+    g_assert(offer != NULL);
 
     if (device->listener->selection == NULL)
     {

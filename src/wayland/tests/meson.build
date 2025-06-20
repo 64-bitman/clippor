@@ -8,21 +8,33 @@ lib = static_library(name, sources,
   dependencies: deps,
   link_with: link_with
   )
-runner = find_program('runner.sh')
 suite = ['wayland']
 
 wayland_connection = executable(
   'wayland-connection',
   'wayland-connection.c',
+  'test_util.c',
   dependencies: deps,
-  include_directories: includes,
+  include_directories: [includes, '.'],
+  link_with: lib)
+wayland_seat = executable(
+  'wayland-seat',
+  'wayland-seat.c',
+  'test_util.c',
+  dependencies: deps,
+  include_directories: [includes, '.'],
   link_with: lib)
 
 test(
   'wayland-connection',
-  runner,
-  args: [wayland_connection.full_path()],
-  depends: wayland_connection,
+  wayland_connection,
+  env: env,
+  protocol: protocol,
+  suite: suite
+  )
+test(
+  'wayland-seat',
+  wayland_seat,
   env: env,
   protocol: protocol,
   suite: suite

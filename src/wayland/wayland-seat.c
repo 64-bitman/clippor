@@ -1,5 +1,4 @@
 #include "wayland-seat.h"
-#include "clippor-clipboard.h"
 #include "wayland-connection.h"
 #include <fcntl.h>
 #include <gio/gio.h>
@@ -17,31 +16,46 @@ G_DEFINE_QUARK(wayland_seat_error_quark, wayland_seat_error)
 // everytime the text selection changes + we also preserve their mime types,
 // since we can't handle all mime types.
 
+// WaylandSeat should always be weak referenced, with the only strong reference
+// being its WaylandConnection that created it.
+
+typedef struct
+{
+    // Set at construct time
+    const gchar *name;
+    ClipporSelectionType type;
+
+    GWeakRef entry; // Current entry for selection. We use a weak
+                    // reference in case the entry is removed.
+
+    // When there is a new offer, we remove the previous if any, save it
+    // here, and only attempt to receive from it when requests
+    WaylandDataOffer *offer;
+
+    WaylandDataSource *source;
+} WaylandSeatSelection;
+
 struct _WaylandSeat
 {
     GObject parent;
-
-    // Clipboard this client is attached to, NULL if it is attached to none.
-    ClipporClipboard *regular_cb;
-    ClipporClipboard *primary_cb;
 
     struct wl_seat *proxy;
 
     gchar *name;
     guint32 numerical_name;
     enum wl_seat_capability capabilities;
-
-    gboolean active; // If this seat is actively being used to get/set clipboard
-                     // data.
+    gint timeout; // Timeout when waiting for data.
 
     WaylandConnection *ct; // Parent connection
 
-    GPtrArray *mime_types; // Temporary array for holding mime types until we
-                           // get information in which selection they belong to.
+    struct
+    {
+        WaylandDataDeviceManager *manager;
+        WaylandDataDevice *device;
 
-    WaylandDataDeviceManager *data_device_manager;
-    WaylandDataDevice *data_device;
-    WaylandDataSource *data_source;
+        WaylandSeatSelection regular;
+        WaylandSeatSelection primary;
+    } clipboard;
 };
 
 G_DEFINE_TYPE(WaylandSeat, wayland_seat, G_TYPE_OBJECT)
@@ -49,11 +63,11 @@ G_DEFINE_TYPE(WaylandSeat, wayland_seat, G_TYPE_OBJECT)
 typedef enum
 {
     PROP_NAME = 1,
-    PROP_ACTIVE,
-    PROP_CONNECTION,
-    PROP_CLIPBOARD_REGULAR, // Notify signal will only be send when actually
-                            // changed.
-    PROP_CLIPBOARD_PRIMARY, // Same as above ^.
+    PROP_REGULAR_ENTRY,
+    PROP_PRIMARY_ENTRY,
+    PROP_SEND_DATA, // A "button" used to emit a signal with the all the data
+                    // and mime types of the current offer for the selection
+                    // that it was set to. This is in the form of a hash table.
     N_PROPERTIES
 } WaylandSeatProperty;
 
@@ -63,23 +77,30 @@ static GParamSpec *obj_properties[N_PROPERTIES] = {
 
 typedef enum
 {
-    SIGNAL_SELECTION, // details: ::regular , ::primary
+    SIGNAL_SELECTION,
+    SIGNAL_SEND_DATA,
     N_SIGNALS
 } WaylandSeatSignal;
 
 static guint obj_signals[N_SIGNALS] = {0};
 
-static void selection_default_cb(WaylandSeat *self, GHashTable *mime_types);
-
 static void
-on_removed_from_clipboard(GObject *object, GObject *client, gpointer data);
+default_handler_send_data_signal(GObject *object, GHashTable *mime_types);
 
-static void on_ct_dispose(gpointer data, GObject *object);
+static WaylandSeatSelection *
+wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection);
 
-static gboolean wayland_seat_start(WaylandSeat *self, GError **error);
-static void wayland_seat_stop(WaylandSeat *self);
+static gboolean wayland_seat_clipboard_setup(WaylandSeat *self, GError **error);
+static void wayland_seat_clipboard_unsetup(WaylandSeat *self);
 
-static void wayland_seat_update_selections(WaylandSeat *self, gboolean force);
+static GBytes *receive_data(int32_t fd, gint timeout, GError **error);
+static gboolean
+send_data(int32_t fd, GBytes *data, gint timeout, GError **error);
+
+static gboolean wayland_seat_update_selection(
+    WaylandSeat *self, ClipporSelectionType selection, gboolean ignore_if_none,
+    GError **error
+);
 
 static void
 wayland_seat_set_property(
@@ -87,81 +108,90 @@ wayland_seat_set_property(
 )
 {
     WaylandSeat *self = WAYLAND_SEAT(object);
-    ClipporClipboard **cb;
     GError *error = NULL;
+    WaylandSeatSelection *sel;
 
     switch ((WaylandSeatProperty)property_id)
     {
-    case PROP_ACTIVE:
-    {
-        gboolean new = g_value_get_boolean(value);
+    case PROP_PRIMARY_ENTRY:
+        sel = &self->clipboard.primary;
+        goto new_entry;
+    case PROP_REGULAR_ENTRY:
+        sel = &self->clipboard.regular;
+new_entry:;
+        GError *error = NULL;
+        ClipporEntry *entry = g_value_get_object(value);
 
-        if (new == self->active)
+        g_weak_ref_set(&sel->entry, entry);
+
+        //  Don't want to immediately steal the selection when there is a new
+        //  one.
+        if (clippor_entry_is_from(entry) == object)
             break;
 
-        if (!wayland_connection_is_active(self->ct))
+        if (!wayland_seat_update_selection(self, sel->type, FALSE, &error))
         {
             g_info(
-                "Cannot start Wayland seat '%s', parent connection is not "
-                "active for display '%s'",
-                self->name, wayland_connection_get_display_name(self->ct)
+                "Failed updating selection for seat '%s': %s", self->name,
+                error->message
             );
-            break;
+            g_error_free(error);
         }
 
-        if (new)
+        break;
+    case PROP_SEND_DATA:
+    {
+        ClipporSelectionType selection = g_value_get_enum(value);
+        WaylandSeatSelection *sel = wayland_seat_get_selection(self, selection);
+
+        GPtrArray *mime_types =
+            wayland_seat_clipboard_get_mime_types(self, selection);
+
+        if (mime_types == NULL)
+            break;
+
+        GHashTable *table = g_hash_table_new_full(
+            g_str_hash, g_str_equal, g_free, (void (*)(void *))g_bytes_unref
+        );
+        GError *error = NULL;
+
+        // Get data for all mime types. If an error occurs, then don't emit a
+        // signal.
+        for (guint i = 0; i < mime_types->len; i++)
         {
-            if (!wayland_seat_start(self, &error))
+            const gchar *mime_type = mime_types->pdata[i];
+
+            GBytes *data = wayland_seat_clipboard_receive_data(
+                self, selection, mime_type, &error
+            );
+
+            if (data == NULL)
             {
                 g_assert(error != NULL);
-                g_info(
-                    "Failed starting Wayland seat '%s': %s", self->name,
-                    error->message
-                );
+                break;
             }
-        }
-        else
-        {
-            wayland_seat_stop(self);
-            g_assert(error == NULL);
+
+            g_hash_table_insert(table, g_strdup(mime_type), data);
         }
 
+        g_ptr_array_unref(mime_types);
+
+        if (error != NULL)
+        {
+            g_info(
+                "Failed receiving data for Wayland seat '%s': %s", self->name,
+                error->message
+            );
+            g_error_free(error);
+            g_hash_table_unref(table);
+            break;
+        }
+        g_signal_emit(
+            self, obj_signals[SIGNAL_SEND_DATA],
+            g_quark_from_static_string(sel->name), table
+        );
         break;
     }
-    case PROP_CONNECTION:
-        // Don't create a new reference to ct because it will outlive us anyways
-        self->ct = g_value_get_object(value);
-        g_object_weak_ref(G_OBJECT(self->ct), on_ct_dispose, self);
-        break;
-    case PROP_CLIPBOARD_PRIMARY:
-        cb = &self->primary_cb;
-        goto cb_changed;
-    case PROP_CLIPBOARD_REGULAR:
-        cb = &self->regular_cb;
-cb_changed:
-        if (*cb == CLIPPOR_CLIPBOARD(g_value_get_object(value)))
-            // Don't send notify signal if nothing changed
-            break;
-
-        if (*cb != NULL)
-            g_object_unref(*cb);
-        *cb = g_value_dup_object(value);
-
-        if (*cb == NULL)
-            return;
-
-        // Update seat so it uses the selection for the most recent entry in the
-        // new clipboard.
-        wayland_seat_update_selections(self, TRUE);
-
-        // Get notified when clipboard may have possibly removed client from its
-        // list
-        g_signal_connect(
-            *cb, "client-removed", G_CALLBACK(on_removed_from_clipboard), self
-        );
-
-        g_object_notify_by_pspec(object, pspec);
-        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
         break;
@@ -182,18 +212,24 @@ wayland_seat_get_property(
     case PROP_NAME:
         g_value_set_string(value, self->name);
         break;
-    case PROP_ACTIVE:
-        g_value_set_boolean(value, self->active);
+    case PROP_REGULAR_ENTRY:
+    {
+        ClipporEntry *entry = g_weak_ref_get(&self->clipboard.primary.entry);
+
+        g_object_unref(entry); // Remove strong reference that g_weak_ref_get
+                               // creates, because g_object_set_object already
+                               // does that.
+        g_value_set_object(value, entry);
         break;
-    case PROP_CONNECTION:
-        g_value_set_object(value, self->ct);
+    }
+    case PROP_PRIMARY_ENTRY:
+    {
+        ClipporEntry *entry = g_weak_ref_get(&self->clipboard.primary.entry);
+
+        g_object_unref(entry);
+        g_value_set_object(value, entry);
         break;
-    case PROP_CLIPBOARD_REGULAR:
-        g_value_set_object(value, self->regular_cb);
-        break;
-    case PROP_CLIPBOARD_PRIMARY:
-        g_value_set_object(value, self->primary_cb);
-        break;
+    }
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
         break;
@@ -203,11 +239,6 @@ wayland_seat_get_property(
 static void
 wayland_seat_dispose(GObject *object)
 {
-    WaylandSeat *self = WAYLAND_SEAT(object);
-
-    g_clear_object(&self->regular_cb);
-    g_clear_object(&self->primary_cb);
-
     G_OBJECT_CLASS(wayland_seat_parent_class)->dispose(object);
 }
 
@@ -221,11 +252,10 @@ wayland_seat_finalize(GObject *object)
     if (self->proxy != NULL)
         wl_seat_destroy(self->proxy);
 
-    if (self->mime_types != NULL)
-        g_ptr_array_unref(self->mime_types);
+    wayland_seat_clipboard_unsetup(self);
 
-    if (self->active)
-        wayland_seat_stop(self);
+    g_weak_ref_clear(&self->clipboard.regular.entry);
+    g_weak_ref_clear(&self->clipboard.primary.entry);
 
     G_OBJECT_CLASS(wayland_seat_parent_class)->finalize(object);
 }
@@ -242,37 +272,41 @@ wayland_seat_class_init(WaylandSeatClass *class)
     gobject_class->finalize = wayland_seat_finalize;
 
     obj_properties[PROP_NAME] = g_param_spec_string(
-        "name", "Seat name", "Name of Wayland seat", "", G_PARAM_READABLE
+        "name", "Name", "Name of Wayland seat", "", G_PARAM_READABLE
     );
-    obj_properties[PROP_ACTIVE] = g_param_spec_boolean(
-        "active", "Active", "If Wayland seat selection is managed by Clippor",
-        FALSE, G_PARAM_READWRITE
+    obj_properties[PROP_REGULAR_ENTRY] = g_param_spec_object(
+        "regular-entry", "Regular selection entry",
+        "Entry for regular selection", CLIPPOR_TYPE_ENTRY, G_PARAM_READWRITE
     );
-    obj_properties[PROP_CONNECTION] = g_param_spec_object(
-        "connection", "Connection", "Parent Wayland connection",
-        WAYLAND_TYPE_CONNECTION, G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY
+    obj_properties[PROP_PRIMARY_ENTRY] = g_param_spec_object(
+        "primary-entry", "Primary selection entry",
+        "Entry for primary selection", CLIPPOR_TYPE_ENTRY, G_PARAM_READWRITE
     );
-    obj_properties[PROP_CLIPBOARD_REGULAR] = g_param_spec_object(
-        "clipboard-regular", "Regular clipboard",
-        "Clipboard this client is attached to for the regular selection",
-        CLIPPOR_TYPE_CLIPBOARD, G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY
-    );
-    obj_properties[PROP_CLIPBOARD_PRIMARY] = g_param_spec_object(
-        "clipboard-primary", "Primary clipboard",
-        "Clipboard this client is attached to for the primary selection",
-        CLIPPOR_TYPE_CLIPBOARD, G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY
+    obj_properties[PROP_SEND_DATA] = g_param_spec_enum(
+        "send-data", "Send data",
+        "Emit a signal containing the data and mime types of the current offer "
+        "for the set selection",
+        CLIPPOR_TYPE_SELECTION_TYPE, CLIPPOR_SELECTION_TYPE_NONE,
+        G_PARAM_WRITABLE
     );
 
     g_object_class_install_properties(
         gobject_class, N_PROPERTIES, obj_properties
     );
 
-    obj_signals[SIGNAL_SELECTION] = g_signal_new_class_handler(
+    // Used to notify any clipboards that we have a new selection now
+    obj_signals[SIGNAL_SELECTION] = g_signal_new(
         "selection", G_TYPE_FROM_CLASS(class),
         G_SIGNAL_RUN_LAST | G_SIGNAL_NO_HOOKS | G_SIGNAL_NO_RECURSE |
             G_SIGNAL_DETAILED,
-        G_CALLBACK(selection_default_cb), NULL, NULL, NULL, G_TYPE_NONE, 1,
-        G_TYPE_HASH_TABLE
+        0, NULL, NULL, NULL, G_TYPE_NONE, 1, CLIPPOR_TYPE_SELECTION_TYPE
+    );
+    obj_signals[SIGNAL_SEND_DATA] = g_signal_new_class_handler(
+        "send-data", G_TYPE_FROM_CLASS(class),
+        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_HOOKS | G_SIGNAL_NO_RECURSE |
+            G_SIGNAL_DETAILED,
+        G_CALLBACK(default_handler_send_data_signal), NULL, NULL, NULL,
+        G_TYPE_NONE, 1, G_TYPE_HASH_TABLE
     );
 }
 
@@ -280,40 +314,20 @@ static void
 wayland_seat_init(WaylandSeat *self)
 {
     self->name = "";
-}
 
-static void
-selection_default_cb(WaylandSeat *self G_GNUC_UNUSED, GHashTable *mime_types)
-{
-    if (mime_types != NULL)
-        g_hash_table_unref(mime_types);
-}
+    self->clipboard.regular.name = "regular";
+    self->clipboard.primary.name = "primary";
 
-static void
-on_removed_from_clipboard(
-    GObject *object G_GNUC_UNUSED, GObject *client, gpointer data
-)
-{
-    WaylandSeat *seat = data;
+    self->clipboard.regular.type = CLIPPOR_SELECTION_TYPE_REGULAR;
+    self->clipboard.primary.type = CLIPPOR_SELECTION_TYPE_PRIMARY;
 
-    if (seat->regular_cb == CLIPPOR_CLIPBOARD(client))
-        g_clear_object(&seat->regular_cb);
-    else if (seat->primary_cb == CLIPPOR_CLIPBOARD(client))
-        g_clear_object(&seat->primary_cb);
-}
-
-static void
-on_ct_dispose(gpointer data, GObject *object G_GNUC_UNUSED)
-{
-    WaylandSeat *seat = data;
-
-    wayland_seat_destroy(seat);
+    g_weak_ref_init(&self->clipboard.regular.entry, NULL);
+    g_weak_ref_init(&self->clipboard.primary.entry, NULL);
 }
 
 static void wl_seat_listener_capabilities(
     void *data, struct wl_seat *seat, uint32_t capabilties
 );
-
 static void
 wl_seat_listener_name(void *data, struct wl_seat *seat, const char *name);
 
@@ -327,30 +341,36 @@ wayland_seat_new(
     GError **error
 )
 {
-    g_return_val_if_fail(wayland_connection_is_active(ct), NULL);
     g_return_val_if_fail(seat_proxy != NULL, NULL);
     g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
-    WaylandSeat *seat = g_object_new(WAYLAND_TYPE_SEAT, "connection", ct, NULL);
+    WaylandSeat *seat = g_object_new(WAYLAND_TYPE_SEAT, NULL);
 
     seat->proxy = seat_proxy;
+    seat->ct = ct; // No need to create new reference, ct will always outlive us
 
-    wl_seat_add_listener(seat->proxy, &wl_seat_listener, g_object_ref(seat));
+    wl_seat_add_listener(seat->proxy, &wl_seat_listener, seat);
 
     // Get name and capabilities
-    if (!wayland_connection_roundtrip(ct, error))
+    if (!wayland_connection_roundtrip(ct, error) ||
+        !wayland_seat_clipboard_setup(seat, error))
     {
-        g_prefix_error_literal(error, "Cannot get Wayland seat attributes");
+        g_assert(error != NULL);
+        g_prefix_error_literal(error, "Wayland seat failed: ");
         g_object_unref(seat);
         return NULL;
     }
-
-    g_debug("New Wayland seat '%s'", seat->name);
-
-    g_object_unref(seat);
     seat->numerical_name = numerical_name;
 
     return seat;
+}
+
+static void
+default_handler_send_data_signal(
+    GObject *object G_GNUC_UNUSED, GHashTable *mime_types
+)
+{
+    g_hash_table_unref(mime_types);
 }
 
 static void
@@ -398,137 +418,224 @@ wayland_seat_get_proxy(WaylandSeat *self)
     return self->proxy;
 }
 
-gboolean
-wayland_seat_is_active(WaylandSeat *self)
+static gboolean
+wayland_seat_clipboard_valid(WaylandSeat *self)
 {
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), FALSE);
-    return self->active;
+    g_assert(WAYLAND_IS_SEAT(self));
+
+    return wayland_data_device_manager_is_valid(self->clipboard.manager) &&
+           wayland_data_device_is_valid(self->clipboard.device);
 }
 
-static void data_device_event_data_offer(
+static WaylandSeatSelection *
+wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection)
+{
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+        return &self->clipboard.regular;
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+        return &self->clipboard.primary;
+    else
+    {
+        g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
+        return NULL;
+    }
+}
+
+static void wayland_data_device_listener_data_offer(
     void *data, WaylandDataDevice *device, WaylandDataOffer *offer
 );
-static void data_device_event_selection(
+static void wayland_data_device_listener_selection(
     void *data, WaylandDataDevice *device, WaylandDataOffer *offer,
     ClipporSelectionType selection
 );
-static void data_device_event_finished(void *data, WaylandDataDevice *device);
+static void
+wayland_data_device_listener_finished(void *data, WaylandDataDevice *device);
+
+static gboolean wayland_data_offer_listener_offer(
+    void *data, WaylandDataOffer *offer, const char *mime_type
+);
 
 static void data_source_event_send(
     void *data, WaylandDataSource *source, const char *mime_type, int32_t fd
 );
 static void data_source_event_cancelled(void *data, WaylandDataSource *source);
 
-static WaylandDataDeviceListener data_device_listener = {
-    .data_offer = data_device_event_data_offer,
-    .selection = data_device_event_selection,
-    .finished = data_device_event_finished
+static WaylandDataDeviceListener wayland_data_device_listener = {
+    .data_offer = wayland_data_device_listener_data_offer,
+    .selection = wayland_data_device_listener_selection,
+    .finished = wayland_data_device_listener_finished
 };
 
-static WaylandDataOfferListener data_offer_listener = {.offer = NULL};
+static WaylandDataOfferListener wayland_data_offer_listener = {
+    .offer = wayland_data_offer_listener_offer
+};
 
 static WaylandDataSourceListener data_source_listener = {
     .send = data_source_event_send, .cancelled = data_source_event_cancelled
 };
 
-/*
- * Start listening for new data offers
- */
 static gboolean
-wayland_seat_start(WaylandSeat *self, GError **error)
+wayland_seat_clipboard_setup(WaylandSeat *self, GError **error)
 {
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), FALSE);
-    g_return_val_if_fail(wayland_connection_is_active(self->ct), FALSE);
-    g_return_val_if_fail(!wayland_seat_is_active(self), FALSE);
-    g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+    g_assert(WAYLAND_IS_SEAT(self));
+    g_assert(error == NULL || *error == NULL);
 
-    self->data_device_manager =
+    self->clipboard.manager =
         wayland_connection_get_data_device_manager(self->ct);
-
-    if (self->data_device_manager == NULL)
-    {
-        g_set_error(
-            error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_START,
-            "No Wayland data control protocol is available"
-        );
-        return FALSE;
-    }
-
-    self->data_device = wayland_data_device_manager_get_data_device(
-        self->data_device_manager, self
+    self->clipboard.device = wayland_data_device_manager_get_data_device(
+        self->clipboard.manager, self
     );
+
     wayland_data_device_add_listener(
-        self->data_device, &data_device_listener, self
+        self->clipboard.device, &wayland_data_device_listener, self
     );
 
-    // Let the main event loop dispatch the events later
+    // Let main loop dispatch events later
     if (!wayland_connection_flush(self->ct, error))
     {
-        g_assert(error == NULL || *error != NULL);
-        g_prefix_error(error, "Failed starting seat '%s': ", self->name);
+        g_assert(error != NULL);
+        g_prefix_error(
+            error, "Failed setting up Wayland seat '%s' clipboard: ", self->name
+        );
+        wayland_seat_clipboard_unsetup(self);
         return FALSE;
     }
-
-    self->active = TRUE;
 
     return TRUE;
 }
 
 static void
-wayland_seat_stop(WaylandSeat *self)
+wayland_seat_clipboard_unsetup(WaylandSeat *self)
 {
-    g_return_if_fail(WAYLAND_IS_SEAT(self));
-    g_return_if_fail(wayland_connection_is_active(self->ct));
-    g_return_if_fail(wayland_seat_is_active(self));
+    g_assert(WAYLAND_IS_SEAT(self));
 
-    wayland_data_device_manager_unused(self->data_device_manager);
-    wayland_data_device_destroy(self->data_device);
-    wayland_data_source_destroy(self->data_source);
+    wayland_data_device_manager_unused(self->clipboard.manager);
+    wayland_data_device_destroy(self->clipboard.device);
 
-    self->active = FALSE;
+    wayland_data_source_destroy(self->clipboard.regular.source);
+    wayland_data_source_destroy(self->clipboard.primary.source);
 
-    wayland_connection_flush(self->ct, NULL);
+    wayland_data_offer_destroy(self->clipboard.regular.offer);
+    wayland_data_offer_destroy(self->clipboard.primary.offer);
 }
 
-/*
- * Destroy the seat proxy, making the seat permanently inactive. Also removes it
- * from any clipboards.
- */
-void
-wayland_seat_destroy(WaylandSeat *self)
+// Data offer event will not be sent if selection is cleared/empty.
+static void
+wayland_data_device_listener_data_offer(
+    void *data, WaylandDataDevice *device G_GNUC_UNUSED, WaylandDataOffer *offer
+)
 {
-    g_return_if_fail(WAYLAND_IS_SEAT(self));
-
-    wayland_seat_set_status(self, FALSE);
-    wl_seat_destroy(self->proxy);
-    self->proxy = NULL;
-
-    g_object_set(self, "clipboard-regular", NULL, NULL);
-    g_object_set(self, "clipboard-primary", NULL, NULL);
+    wayland_data_offer_add_listener(offer, &wayland_data_offer_listener, data);
 }
 
-/*
- * Returns FALSE on error
- */
-gboolean
-wayland_seat_set_status(WaylandSeat *self, gboolean active)
+static void
+wayland_data_device_listener_selection(
+    void *data, WaylandDataDevice *device G_GNUC_UNUSED,
+    WaylandDataOffer *offer, ClipporSelectionType selection
+)
 {
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), FALSE);
+    WaylandSeat *seat = data;
+    WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
 
-    g_object_set(self, "active", active, NULL);
+    // Destroy previous offer
+    wayland_data_offer_destroy(sel->offer);
 
-    if (active != self->active)
-        return FALSE;
+    if (offer == NULL)
+    {
+        GError *error = NULL;
+
+        // Selection cleared/empty.
+        sel->source = NULL;
+        sel->offer = NULL;
+
+        // Set selection to latest entry (which should have the same data as the
+        // previous offer before the selection cleared. This is unless there is
+        // no entry then nothing is done.
+        if (!wayland_seat_update_selection(seat, selection, TRUE, &error))
+        {
+            g_info(
+                "Failed updating selection for Wayland seat '%s': %s",
+                seat->name, error->message
+            );
+            g_error_free(error);
+        }
+        return;
+    }
+
+    if (sel->source != NULL)
+    {
+        // We are the source client
+        wayland_data_offer_destroy(offer);
+        sel->offer = NULL;
+        return;
+    }
+
+    sel->offer = offer;
+
+    g_signal_emit(
+        seat, obj_signals[SIGNAL_SELECTION],
+        g_quark_from_static_string(sel->name), selection
+    );
+}
+
+static void
+wayland_data_device_listener_finished(void *data, WaylandDataDevice *device)
+{
+    WaylandSeat *seat = data;
+
+    wayland_data_device_destroy(device);
+    seat->clipboard.device = NULL;
+}
+
+static gboolean
+wayland_data_offer_listener_offer(
+    void *data, WaylandDataOffer *offer, const char *mime_type
+)
+{
+    // Temporary
+    (void)data;
+    (void)offer;
+    (void)mime_type;
     return TRUE;
+}
+
+static void
+data_source_event_send(
+    void *data, WaylandDataSource *source G_GNUC_UNUSED, const char *mime_type,
+    int32_t fd
+)
+{
+    GError *error = NULL;
+    ClipporEntry *entry = data;
+    GBytes *stuff =
+        g_hash_table_lookup(clippor_entry_get_mime_types(entry), mime_type);
+
+    if (!send_data(fd, stuff, 3000, &error))
+    {
+        g_assert(error != NULL);
+        g_info("Data source send event failed: %s", error->message);
+        g_error_free(error);
+    }
+
+    close(fd);
+}
+
+static void
+data_source_event_cancelled(void *data G_GNUC_UNUSED, WaylandDataSource *source)
+{
+    wayland_data_source_destroy(source);
+    // No need to set to NULL in WaylandSeat because we will receive selection
+    // event and set source to NULL.
 }
 
 /*
  * Returns NULL on error
  */
 static GBytes *
-receive_data(int32_t fd, GError **error)
+receive_data(int32_t fd, gint timeout, GError **error)
 {
-    g_return_val_if_fail(error == NULL || *error == NULL, NULL);
+    g_assert(error == NULL || *error == NULL);
+    g_assert(fd >= 0);
 
     GByteArray *data = g_byte_array_new();
     GPollFD pfd = {.fd = fd, .events = G_IO_IN};
@@ -544,6 +651,7 @@ receive_data(int32_t fd, GError **error)
         return NULL;
     }
 
+    GError *err = NULL;
     guint8 *bytes = g_malloc(8192);
     ssize_t r = 0;
 
@@ -562,18 +670,17 @@ receive_data(int32_t fd, GError **error)
             if (errno == EAGAIN || errno == EINTR)
             {
 poll_data:
-                // TODO: ADD CONFIGURABLE TIMEOUT
-                if (g_poll(&pfd, 1, 3000) > 0)
+                if (g_poll(&pfd, 1, timeout) > 0)
                     continue;
                 else
                     g_set_error(
-                        error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
+                        &err, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
                         "g_poll() failed: %s", g_strerror(errno)
                     );
                 break;
             }
             g_set_error(
-                error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
+                &err, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
                 "read() failed: %s", g_strerror(errno)
             );
             break;
@@ -582,8 +689,9 @@ poll_data:
     }
     g_free(bytes);
 
-    if (*error != NULL)
+    if (err != NULL)
     {
+        g_propagate_error(error, err);
         g_byte_array_unref(data);
         return NULL;
     }
@@ -592,11 +700,11 @@ poll_data:
 }
 
 static gboolean
-send_data(int32_t fd, GBytes *data, GError **error)
+send_data(int32_t fd, GBytes *data, gint timeout, GError **error)
 {
-    g_return_val_if_fail(data != NULL, FALSE);
-    g_return_val_if_fail(fd >= 0, FALSE);
-    g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+    g_assert(data != NULL);
+    g_assert(fd >= 0);
+    g_assert(error == NULL || *error == NULL);
 
     gsize length;
     const char *stuff = g_bytes_get_data(data, &length);
@@ -605,8 +713,7 @@ send_data(int32_t fd, GBytes *data, GError **error)
     ssize_t written = 0;
     size_t total = 0;
 
-    // TODO: ADD CONFIGURABLE TIMEOUT
-    while (errno = 0, total < length && g_poll(&pfd, 1, 3000) > 0)
+    while (errno = 0, total < length && g_poll(&pfd, 1, timeout) > 0)
     {
         written = write(fd, stuff + total, length - total);
 
@@ -633,247 +740,128 @@ send_data(int32_t fd, GBytes *data, GError **error)
     return TRUE;
 }
 
+/*
+ * Set selection to the current entry. If `ignore_if_none` is TRUE, then if
+ * there is no entry found, don't set the selection to NULL. This avoids
+ * recursion loops when trying to update the seletion when the selection is
+ * cleared.
+ */
 static gboolean
-wayland_seat_set_selection(
-    WaylandSeat *self, ClipporSelectionType selection, ClipporEntry *entry,
+wayland_seat_update_selection(
+    WaylandSeat *self, ClipporSelectionType selection, gboolean ignore_if_none,
     GError **error
 )
 {
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), FALSE);
-    g_return_val_if_fail(CLIPPOR_IS_ENTRY(entry), FALSE);
-    g_return_val_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE, FALSE);
-    g_return_val_if_fail(
-        wayland_data_device_is_valid(self->data_device), FALSE
-    );
-    g_return_val_if_fail(
-        wayland_data_device_manager_is_valid(self->data_device_manager), FALSE
-    );
+    g_assert(WAYLAND_IS_SEAT(self));
+    g_assert(error == NULL || *error == NULL);
+    g_assert(wayland_seat_clipboard_valid(self));
+    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
 
-    // Don't need to worry about possibly leaking the old data source if it
-    // exists because the cancelled event will be called for it.
-    self->data_source = wayland_data_device_manager_create_data_source(
-        self->data_device_manager
-    );
+    WaylandSeatSelection *sel = wayland_seat_get_selection(self, selection);
+    ClipporEntry *entry = g_weak_ref_get(&sel->entry);
 
-    wayland_data_source_add_listener(
-        self->data_source, &data_source_listener, entry
-    );
+
+    if (entry == NULL)
+    {
+        if (ignore_if_none)
+            return TRUE;
+        // Clear selection
+        wayland_data_device_set_seletion(
+            self->clipboard.device, NULL, selection
+        );
+        goto roundtrip;
+    }
+
+    wayland_data_source_destroy(sel->source);
+    sel->source =
+        wayland_data_device_manager_create_data_source(self->clipboard.manager);
+
+    wayland_data_source_add_listener(sel->source, &data_source_listener, entry);
 
     GHashTable *mime_types = clippor_entry_get_mime_types(entry);
     GHashTableIter iter;
     const gchar *mime_type;
 
+    g_object_unref(entry);
     g_hash_table_iter_init(&iter, mime_types);
 
     while (g_hash_table_iter_next(&iter, (gpointer *)&mime_type, NULL))
-        wayland_data_source_offer(self->data_source, mime_type);
+        wayland_data_source_offer(sel->source, mime_type);
 
     wayland_data_device_set_seletion(
-        self->data_device, self->data_source, selection
+        self->clipboard.device, sel->source, selection
     );
 
+roundtrip:
     if (!wayland_connection_roundtrip(self->ct, error))
     {
-        g_prefix_error_literal(error, "Failed setting selection");
+        g_prefix_error_literal(error, "Failed setting selection: ");
         return FALSE;
     }
 
     return TRUE;
 }
 
-static void
-wayland_seat_emit_selection_signal(
-    WaylandSeat *self, ClipporSelectionType selection, GHashTable *mime_types
+/*
+ * Get the mime types for the current offer or NULL if there is no offer.
+ * Creates a new reference.
+ */
+GPtrArray *
+wayland_seat_clipboard_get_mime_types(
+    WaylandSeat *self, ClipporSelectionType selection
 )
 {
-    g_return_if_fail(WAYLAND_IS_SEAT(self));
-    g_return_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE);
-    g_return_if_fail(mime_types != NULL);
+    g_return_val_if_fail(WAYLAND_IS_SEAT(self), NULL);
+    g_return_val_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE, NULL);
 
-    const gchar *detail;
+    WaylandSeatSelection *sel = wayland_seat_get_selection(self, selection);
 
-    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
-        detail = "regular";
-    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
-        detail = "primary";
-    else
-        return;
+    if (sel->offer == NULL)
+        return NULL;
 
-    g_signal_emit(
-        self, obj_signals[SIGNAL_SELECTION], g_quark_from_static_string(detail),
-        mime_types
-    );
+    return g_ptr_array_ref(wayland_data_offer_get_mime_types(sel->offer));
 }
 
 /*
- * Set the selections to the most recent repsective clipboard entry. If `force`
- * is TRUE then always set the selection even if the source client of the most
- * recent entry is the Wayland seat.
+ * Get data of current offer for selection. Returns NULL on error or if there is
+ * no offer available, such as when the selection is empty.
  */
-static void
-wayland_seat_update_selections(WaylandSeat *self, gboolean force)
-{
-    g_return_if_fail(WAYLAND_IS_SEAT(self));
-    g_return_if_fail(self->data_device != NULL);
-
-    ClipporClipboard *cbs[] = {self->regular_cb, self->primary_cb};
-    ClipporSelectionType sels[] = {
-        CLIPPOR_SELECTION_TYPE_REGULAR, CLIPPOR_SELECTION_TYPE_PRIMARY
-    };
-
-    for (gint i = 0; i < 2; i++)
-    {
-        GError *error = NULL;
-        ClipporClipboard *cb = cbs[i];
-
-        if (cb == NULL)
-            continue;
-
-        ClipporEntry *entry = clippor_clipboard_get_entry(cb, 0);
-
-        if (entry == NULL)
-            continue;
-
-        GObject *source_client = clippor_entry_get_source(entry);
-
-        if (!force && source_client == G_OBJECT(self))
-            // No point in setting the selection if we are the source client
-            continue;
-
-        if (!wayland_seat_set_selection(self, sels[i], entry, &error))
-        {
-            g_info("Failed updating selection: %s", error->message);
-            g_error_free(error);
-        }
-    }
-}
-
-static void
-data_device_event_data_offer(
-    void *data, WaylandDataDevice *device G_GNUC_UNUSED, WaylandDataOffer *offer
+GBytes *
+wayland_seat_clipboard_receive_data(
+    WaylandSeat *self, ClipporSelectionType selection, const char *mime_type,
+    GError **error
 )
 {
-    WaylandSeat *seat = data;
+    g_return_val_if_fail(WAYLAND_IS_SEAT(self), NULL);
+    g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE, NULL);
 
-    if (seat->data_source != NULL)
-        // We are the source client
-        return;
+    WaylandSeatSelection *sel = wayland_seat_get_selection(self, selection);
+    GBytes *data = NULL;
 
-    wayland_data_offer_add_listener(offer, &data_offer_listener, seat);
-}
+    if (sel->offer == NULL)
+        return NULL;
 
-static void
-data_device_event_selection(
-    void *data, WaylandDataDevice *device G_GNUC_UNUSED,
-    WaylandDataOffer *offer, ClipporSelectionType selection
-)
-{
-    WaylandSeat *seat = data;
+    int fds[2];
 
-    if (offer == NULL)
+    if (pipe(fds) == -1)
     {
-        // Selection is cleared/empty. Don't emit a signal, instead set the
-        // selection to the most recent history entry.
-        wayland_seat_update_selections(seat, TRUE);
-
-        return;
+        g_set_error(
+            error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
+            "pipe() failed: %s", g_strerror(errno)
+        );
+        return NULL;
     }
 
-    if (seat->data_source != NULL)
-    {
-        // We are the source client
-        wayland_data_offer_destroy(offer);
-        return;
-    }
+    wayland_data_offer_receive(sel->offer, mime_type, fds[1]);
 
-    // Each key is a mime type and its value is the data as a GBytes
-    GPtrArray *mime_types = wayland_data_offer_get_mime_types(offer);
-    GHashTable *table = g_hash_table_new_full(
-        g_str_hash, g_str_equal, g_free, (void (*)(void *))g_bytes_unref
-    );
-    GError *error = NULL;
+    // Close our write end of the pipe so that we receive EOF.
+    close(fds[1]);
 
-    // Receive data from each mime type
-    for (guint i = 0; i < mime_types->len; i++)
-    {
-        const gchar *mime_type = mime_types->pdata[i];
-        GBytes *data = NULL;
-        ;
+    if (wayland_connection_flush(self->ct, error))
+        data = receive_data(fds[0], 3000, error);
 
-        int fds[2];
+    close(fds[0]);
 
-        if (pipe(fds) == -1)
-        {
-            g_set_error(
-                &error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
-                "pipe() failed: %s", g_strerror(errno)
-            );
-            break;
-        }
-
-        wayland_data_offer_receive(offer, mime_type, fds[1]);
-
-        // Close our write end of the pipe so that we receive EOF.
-        close(fds[1]);
-
-        if (wayland_connection_flush(seat->ct, &error))
-            data = receive_data(fds[0], &error);
-
-        close(fds[0]);
-
-        if (data == NULL)
-        {
-            g_assert(error != NULL);
-            break;
-        }
-
-        g_hash_table_insert(table, g_strdup(mime_type), data);
-    }
-
-    if (error != NULL)
-    {
-        g_info("Data device selection event failed: %s", error->message);
-        g_error_free(error);
-        g_hash_table_unref(table);
-    }
-    else
-        wayland_seat_emit_selection_signal(seat, selection, table);
-
-    wayland_data_offer_destroy(offer);
-}
-
-static void
-data_device_event_finished(void *data, WaylandDataDevice *device)
-{
-    WaylandSeat *seat = data;
-
-    wayland_data_device_destroy(device);
-    seat->data_device = NULL;
-}
-
-static void
-data_source_event_send(
-    void *data, WaylandDataSource *source G_GNUC_UNUSED, const char *mime_type,
-    int32_t fd
-)
-{
-    GError *error = NULL;
-    ClipporEntry *entry = data;
-    GBytes *stuff =
-        g_hash_table_lookup(clippor_entry_get_mime_types(entry), mime_type);
-
-    if (!send_data(fd, stuff, &error))
-    {
-        g_assert(error != NULL);
-        g_info("Data source send event failed: %s", error->message);
-        g_error_free(error);
-    }
-
-    close(fd);
-}
-
-static void
-data_source_event_cancelled(void *data G_GNUC_UNUSED, WaylandDataSource *source)
-{
-    wayland_data_source_destroy(source);
+    return data;
 }

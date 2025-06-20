@@ -58,18 +58,8 @@ typedef struct
     );
 } WaylandDataOfferListener;
 
-WaylandConnection *wayland_connection_new(const gchar *display);
-
-gboolean wayland_connection_flush(WaylandConnection *ct, GError **error);
-gint wayland_connection_dispatch(WaylandConnection *ct, GError **error);
-gboolean wayland_connection_roundtrip(WaylandConnection *ct, GError **error);
-
-gboolean wayland_connection_is_active(WaylandConnection *ct);
-
-gboolean
-wayland_connection_set_status(WaylandConnection *self, gboolean active);
-gboolean
-wayland_connection_set_display(WaylandConnection *self, const gchar *display);
+WaylandConnection *
+wayland_connection_new(const gchar *display_name, GError **error);
 
 typedef struct _WaylandSeat WaylandSeat;
 
@@ -79,7 +69,13 @@ wayland_connection_get_seat(WaylandConnection *self, const gchar *name);
 gchar *wayland_connection_get_display_name(WaylandConnection *self);
 struct wl_display *wayland_connection_get_display(WaylandConnection *self);
 
-void wayland_connection_install_source(WaylandConnection *self);
+gboolean wayland_connection_flush(WaylandConnection *ct, GError **error);
+gint wayland_connection_dispatch(WaylandConnection *ct, GError **error);
+gboolean wayland_connection_roundtrip(WaylandConnection *ct, GError **error);
+
+void wayland_connection_install_source(
+    WaylandConnection *self, GMainContext *context
+);
 void wayland_connection_uninstall_source(WaylandConnection *self);
 
 WaylandDataDeviceManager *
@@ -104,8 +100,8 @@ WaylandDataDevice *wayland_data_device_manager_get_data_device(
     WaylandDataDeviceManager *manager, WaylandSeat *seat
 );
 
-WaylandDataSource *
-wayland_data_device_manager_create_data_source(WaylandDataDeviceManager *manager
+WaylandDataSource *wayland_data_device_manager_create_data_source(
+    WaylandDataDeviceManager *manager
 );
 
 // ----- Data Operations -----
