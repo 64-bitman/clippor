@@ -34,7 +34,7 @@ start_server(void)
 
     clippor_clipboard_add_client(
         server->cb, "Untitled",
-        G_OBJECT(wayland_connection_get_seat(server->ct, NULL)),
+        CLIPPOR_CLIENT(wayland_connection_get_seat(server->ct, NULL)),
         CLIPPOR_SELECTION_TYPE_REGULAR
     );
 

@@ -1,4 +1,5 @@
 #include "clippor-clipboard.h"
+#include "clippor-client.h"
 #include "clippor-entry.h"
 #include <glib-object.h>
 
@@ -33,9 +34,7 @@ typedef enum
     N_PROPERTIES
 } ClipporClipboardProperty;
 
-static GParamSpec *obj_properties[N_PROPERTIES] = {
-    NULL,
-};
+static GParamSpec *obj_properties[N_PROPERTIES] = {NULL};
 
 static void callback_client_unref(gpointer weak_ref);
 
@@ -198,68 +197,50 @@ clippor_clipboard_add_entry(ClipporClipboard *self, ClipporEntry *entry)
     g_queue_push_head(self->entries, entry);
 }
 
-static void
-callback_send_data_hash_table(
-    GObject *client G_GNUC_UNUSED, GHashTable *mime_types, gpointer data
-)
-{
-    GHashTable **table = data;
-
-    *table = g_hash_table_ref(mime_types);
-}
-
 /*
  * Called when there is a new selection from a client. If so then update the
  * other clients and add a new entry to the queue.
  */
 static void
 callback_client_selection(
-    GObject *client, ClipporSelectionType selection, gpointer data
+    GObject *object, ClipporSelectionType selection, gpointer data
 )
 {
+    ClipporClient *client = CLIPPOR_CLIENT(object);
     ClipporClipboard *cb = data;
 
-    ClipporEntry *entry = clippor_entry_new(get_new_entry_index(cb), client);
-    GHashTable *mime_types = NULL;
+    ClipporEntry *entry = clippor_entry_new(get_new_entry_index(cb), object);
 
-    const gchar *signal_name;
-    const gchar *property_name;
+    // Get mime types & data and add them to the entry
+    GPtrArray *mime_types = clippor_client_get_mime_types(client, selection);
+    GError *error = NULL;
 
-    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+    // Abort on any error
+    for (guint i = 0; i < mime_types->len; i++)
     {
-        signal_name = "send-data::regular";
-        property_name = "regular-entry";
-    }
-    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
-    {
-        signal_name = "send-data::primary";
-        property_name = "primary-entry";
-    }
-    else
-        return;
+        const char *mime_type = mime_types->pdata[i];
+        GBytes *data =
+            clippor_client_get_data(client, mime_type, selection, &error);
 
-    // Get mime types and data.
-    gulong handler = g_signal_connect(
-        client, signal_name, G_CALLBACK(callback_send_data_hash_table),
-        &mime_types
-    );
-    g_object_set(client, "send-data", selection, NULL);
+        if (data == NULL)
+        {
+            g_assert(error != NULL);
 
-    g_signal_handler_disconnect(client, handler);
+            g_message(
+                "Failed receiving data from client for clipboard '%s': %s",
+                cb->label, error->message
+            );
 
-    if (mime_types == NULL)
-    {
-        // An error occured
-        g_info(
-            "Could not update selection from new entry for clipboard '%s'",
-            cb->label
-        );
-        g_object_unref(entry);
-        return;
+            g_error_free(error);
+            g_object_unref(entry);
+            g_ptr_array_unref(mime_types);
+            return;
+        }
+
+        clippor_entry_add_mime_type(entry, mime_type, data);
     }
 
-    clippor_entry_set_mime_types(entry, mime_types, TRUE);
-
+    g_ptr_array_unref(mime_types);
     clippor_clipboard_add_entry(cb, entry);
 
     // Update clients (includes the source client too)
@@ -270,20 +251,20 @@ callback_client_selection(
 
     while (g_hash_table_iter_next(&iter, NULL, (gpointer *)&weak_ref))
     {
-        GObject *client = g_weak_ref_get(weak_ref);
+        ClipporClient *client = g_weak_ref_get(weak_ref);
 
         if (client == NULL)
             // Client was finalized, remove it
             g_hash_table_iter_remove(&iter);
 
         // Set the respective entry to the current one
-        g_object_set(client, property_name, entry, NULL);
+        clippor_client_set_entry(client, entry, selection, &error);
     }
 }
 
 void
 clippor_clipboard_add_client(
-    ClipporClipboard *self, const char *label, GObject *client,
+    ClipporClipboard *self, const char *label, ClipporClient *client,
     ClipporSelectionType selection
 )
 {
@@ -297,7 +278,7 @@ clippor_clipboard_add_client(
     // have to loop through all the entries, and destroy the object that
     // matches. Additionally, we can't use the normal destroy function for the
     // hash table, we must loop through all the entries.
-    // 
+    //
     // Honestly seems more complicated than just removing the entry when we loop
     // through the haash table on a new selection.
     g_weak_ref_init(ref, client);
@@ -306,26 +287,20 @@ clippor_clipboard_add_client(
 
     // Update client selection
 
-    gchar *entry_property;
     gchar *signal_name;
 
     if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
-    {
-        entry_property = "regular-entry";
         signal_name = "selection::regular";
-    }
     else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
-    {
-        entry_property = "primary-entry";
         signal_name = "selection::primary";
-    }
     else
         return;
 
     ClipporEntry *entry = g_queue_peek_head(self->entries);
+    GError *error = NULL;
 
     if (entry != NULL)
-        g_object_set(client, entry_property, entry, NULL);
+        clippor_client_set_entry(client, entry, selection, &error);
 
     // Start listening for new selections
     g_signal_connect(

@@ -99,9 +99,7 @@ typedef enum
     N_PROPERTIES
 } WaylandConnectionProperty;
 
-static GParamSpec *obj_properties[N_PROPERTIES] = {
-    NULL,
-};
+static GParamSpec *obj_properties[N_PROPERTIES] = {NULL};
 
 static gboolean
 wayland_connection_setup(WaylandConnection *self, GError **error);

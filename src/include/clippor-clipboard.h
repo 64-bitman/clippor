@@ -18,6 +18,8 @@ typedef enum
     CLIPPOR_SELECTION_TYPE_PRIMARY = 1 << 1
 } ClipporSelectionType;
 
+typedef struct _ClipporClient ClipporClient;
+
 GType clippor_selection_type_get_type(void);
 
 ClipporClipboard *clippor_clipboard_new(const gchar *label);
@@ -26,6 +28,6 @@ void
 clippor_clipboard_add_entry(ClipporClipboard *self, ClipporEntry *entry);
 
 void clippor_clipboard_add_client(
-    ClipporClipboard *self, const char *label, GObject *client,
+    ClipporClipboard *self, const char *label, ClipporClient *client,
     ClipporSelectionType selection
 );

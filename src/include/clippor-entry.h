@@ -18,7 +18,3 @@ GObject *clippor_entry_is_from(ClipporEntry *self);
 void clippor_entry_add_mime_type(
     ClipporEntry *self, const gchar *mime_type, GBytes *data
 );
-
-void clippor_entry_set_mime_types(
-    ClipporEntry *self, GHashTable *mime_types, gboolean take
-);

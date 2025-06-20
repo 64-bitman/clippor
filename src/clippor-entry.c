@@ -24,9 +24,7 @@ typedef enum
     N_PROPERTIES
 } ClipporEntryProperty;
 
-static GParamSpec *obj_properties[N_PROPERTIES] = {
-    NULL,
-};
+static GParamSpec *obj_properties[N_PROPERTIES] = {NULL};
 
 static void
 clippor_entry_set_property(
@@ -162,7 +160,8 @@ clippor_entry_is_from(ClipporEntry *self)
 }
 
 /*
- * Mime type must not be NULL
+ * Adds mime type to entry along with its data. Does not create a new reference
+ * of `data`;
  */
 void
 clippor_entry_add_mime_type(
@@ -172,24 +171,5 @@ clippor_entry_add_mime_type(
     g_return_if_fail(CLIPPOR_IS_ENTRY(self));
     g_return_if_fail(mime_type != NULL);
 
-    g_hash_table_insert(
-        self->mime_types, g_strdup(mime_type), g_bytes_ref(data)
-    );
-}
-
-/*
- * Will create a new reference to table, unless take is TRUE
- */
-void
-clippor_entry_set_mime_types(
-    ClipporEntry *self, GHashTable *mime_types, gboolean take
-)
-{
-    g_return_if_fail(CLIPPOR_IS_ENTRY(self));
-    g_return_if_fail(mime_types != NULL);
-
-    g_hash_table_unref(self->mime_types);
-    if (!take)
-        g_hash_table_ref(mime_types);
-    self->mime_types = mime_types;
+    g_hash_table_insert(self->mime_types, g_strdup(mime_type), data);
 }

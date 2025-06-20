@@ -1,5 +1,6 @@
 #pragma once
 
+#include "clippor-client.h"
 #include "wayland-connection.h"
 #include <glib-object.h>
 #include <wayland-client.h>
@@ -18,7 +19,7 @@ GQuark wayland_seat_error_quark(void);
 
 #define WAYLAND_TYPE_SEAT (wayland_seat_get_type())
 
-G_DECLARE_FINAL_TYPE(WaylandSeat, wayland_seat, WAYLAND, SEAT, GObject)
+G_DECLARE_FINAL_TYPE(WaylandSeat, wayland_seat, WAYLAND, SEAT, ClipporClient)
 
 WaylandSeat *wayland_seat_new(
     WaylandConnection *ct, struct wl_seat *seat_proxy, guint32 numerical_name,
@@ -28,11 +29,3 @@ WaylandSeat *wayland_seat_new(
 gchar *wayland_seat_get_name(WaylandSeat *self);
 guint32 wayland_seat_get_numerical_name(WaylandSeat *self);
 struct wl_seat *wayland_seat_get_proxy(WaylandSeat *self);
-
-GPtrArray *wayland_seat_clipboard_get_mime_types(
-    WaylandSeat *self, ClipporSelectionType selection
-);
-GBytes *wayland_seat_clipboard_receive_data(
-    WaylandSeat *self, ClipporSelectionType selection, const char *mime_type,
-    GError **error
-);

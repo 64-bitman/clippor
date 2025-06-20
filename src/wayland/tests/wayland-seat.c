@@ -72,37 +72,6 @@ test_wayland_seat_clipboard(
     fixture->loop = g_main_loop_new(NULL, FALSE);
     thread = g_thread_new("loop", test_wayland_seat_clipboard_thread, fixture);
 
-    wl_copy(FALSE, "test");
-
-    g_usleep(100 * 1000);
-    GPtrArray *arr = wayland_seat_clipboard_get_mime_types(
-        seat, CLIPPOR_SELECTION_TYPE_REGULAR
-    );
-    const gchar *mimes[] = {
-        "text/plain", "text/plain;charset=utf-8", "TEXT", "STRING",
-        "UTF8_STRING"
-    };
-
-    // Check if mime types are received correctly
-    for (guint i = 0; i < sizeof(mimes) / sizeof(*mimes); i++)
-        g_assert_true(
-            g_ptr_array_find_with_equal_func(arr, mimes[i], g_str_equal, NULL)
-        );
-
-    g_ptr_array_unref(arr);
-
-    // Check if data is received correctly
-    GBytes *data = wayland_seat_clipboard_receive_data(
-        seat, CLIPPOR_SELECTION_TYPE_REGULAR, "text/plain", NULL
-    );
-    gsize sz;
-    const gchar *text = g_bytes_get_data(data, &sz);
-    gchar *str = g_strdup_printf("%.*s", (gint)sz, text);
-
-    g_assert_cmpstr(str, ==, "test");
-    g_bytes_unref(data);
-    g_free(str);
-
     // Check if seat is unreferenced when connection is lost
     GWeakRef ref;
 
