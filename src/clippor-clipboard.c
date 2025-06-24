@@ -287,15 +287,6 @@ clippor_clipboard_add_client(
 
     // Update client selection
 
-    gchar *signal_name;
-
-    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
-        signal_name = "selection::regular";
-    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
-        signal_name = "selection::primary";
-    else
-        return;
-
     ClipporEntry *entry = g_queue_peek_head(self->entries);
     GError *error = NULL;
 
@@ -304,6 +295,14 @@ clippor_clipboard_add_client(
 
     // Start listening for new selections
     g_signal_connect(
-        client, signal_name, G_CALLBACK(callback_client_selection), self
+        client, "selection", G_CALLBACK(callback_client_selection), self
     );
+}
+
+ClipporEntry *
+clippor_clipboard_get_entry(ClipporClipboard *self, guint64 index)
+{
+    g_return_val_if_fail(CLIPPOR_IS_CLIPBOARD(self), NULL);
+
+    return g_queue_peek_nth(self->entries, index);
 }

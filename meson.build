@@ -15,6 +15,10 @@ if get_option('buildtype').startswith('debug')
   # add_project_link_arguments('-pg', language: 'c')
 endif
 
+env = environment()
+
+env.set('GSETTINGS_SCHEMA_DIR', 'schemas/')
+
 deps = []
 link_with = []
 sources = []

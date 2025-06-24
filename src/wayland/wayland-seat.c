@@ -1,4 +1,5 @@
 #include "wayland-seat.h"
+#include "global.h"
 #include "wayland-connection.h"
 #include <fcntl.h>
 #include <gio/gio.h>
@@ -36,7 +37,7 @@ typedef struct
 
 struct _WaylandSeat
 {
-    GObject parent;
+    ClipporClient parent;
 
     struct wl_seat *proxy;
 
@@ -61,7 +62,7 @@ G_DEFINE_TYPE(WaylandSeat, wayland_seat, CLIPPOR_TYPE_CLIENT)
 
 typedef enum
 {
-    PROP_NAME = 1,
+    PROP_TIMEOUT = 1,
     N_PROPERTIES
 } WaylandSeatProperty;
 
@@ -99,11 +100,13 @@ wayland_seat_set_property(
     GObject *object, guint property_id, const GValue *value, GParamSpec *pspec
 )
 {
-    /* WaylandSeat *self = WAYLAND_SEAT(object); */
-    (void)value;
+    WaylandSeat *self = WAYLAND_SEAT(object);
 
     switch ((WaylandSeatProperty)property_id)
     {
+    case PROP_TIMEOUT:
+        self->timeout = g_value_get_uint(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
         break;
@@ -119,8 +122,8 @@ wayland_seat_get_property(
 
     switch ((WaylandSeatProperty)property_id)
     {
-    case PROP_NAME:
-        g_value_set_string(value, self->name);
+    case PROP_TIMEOUT:
+        g_value_set_uint(value, self->timeout);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -168,8 +171,9 @@ wayland_seat_class_init(WaylandSeatClass *class)
     gobject_class->dispose = wayland_seat_dispose;
     gobject_class->finalize = wayland_seat_finalize;
 
-    obj_properties[PROP_NAME] = g_param_spec_string(
-        "name", "Name", "Name of Wayland seat", "", G_PARAM_READABLE
+    obj_properties[PROP_TIMEOUT] = g_param_spec_uint(
+        "timeout", "Timeout", "Timeout to use when transferring data", 0,
+        G_MAXUINT, 500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
 
     g_object_class_install_properties(
@@ -228,6 +232,11 @@ wayland_seat_new(
         return NULL;
     }
     seat->numerical_name = numerical_name;
+
+    if (SETTINGS != NULL)
+        g_settings_bind(
+            SETTINGS, "data-timeout", ct, "timeout", G_SETTINGS_BIND_DEFAULT
+        );
 
     return seat;
 }
@@ -431,9 +440,7 @@ wayland_data_device_listener_selection(
 
     sel->offer = offer;
 
-    gchar *detail = g_strdup_printf("selection::%s", sel->name);
-    g_signal_emit_by_name(seat, detail, selection);
-    g_free(detail);
+    g_signal_emit_by_name(seat, "selection", selection);
 }
 
 static void
@@ -668,7 +675,7 @@ wayland_seat_client_get_mime_types(
     ClipporClient *self, ClipporSelectionType selection
 )
 {
-    g_assert(WAYLAND_IS_SEAT(self));
+    g_return_val_if_fail(WAYLAND_IS_SEAT(self), NULL);
 
     WaylandSeat *seat = WAYLAND_SEAT(self);
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
@@ -685,7 +692,7 @@ wayland_seat_client_get_data(
     GError **error
 )
 {
-    g_assert(WAYLAND_IS_SEAT(self));
+    g_return_val_if_fail(WAYLAND_IS_SEAT(self), NULL);
 
     WaylandSeat *seat = WAYLAND_SEAT(self);
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
@@ -724,7 +731,7 @@ wayland_seat_client_set_entry(
     GError **error
 )
 {
-    g_assert(WAYLAND_IS_SEAT(self));
+    g_return_val_if_fail(WAYLAND_IS_SEAT(self), FALSE);
 
     WaylandSeat *seat = WAYLAND_SEAT(self);
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);

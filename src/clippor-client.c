@@ -22,9 +22,8 @@ clippor_client_class_init(ClipporClientClass *class)
     // Used to notify any clipboards that we have a new selection now
     obj_signals[SIGNAL_SELECTION] = g_signal_new(
         "selection", G_TYPE_FROM_CLASS(class),
-        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_HOOKS | G_SIGNAL_NO_RECURSE |
-            G_SIGNAL_DETAILED,
-        0, NULL, NULL, NULL, G_TYPE_NONE, 1, CLIPPOR_TYPE_SELECTION_TYPE
+        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_HOOKS | G_SIGNAL_NO_RECURSE, 0, NULL,
+        NULL, NULL, G_TYPE_NONE, 1, CLIPPOR_TYPE_SELECTION_TYPE
     );
 }
 static void

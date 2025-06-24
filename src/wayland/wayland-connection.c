@@ -2,6 +2,7 @@
 #include "clippor-clipboard.h"
 #include "ext-data-control-v1.h"
 #include "glib.h"
+#include "global.h"
 #include "virtual-keyboard-unstable-v1.h"
 #include "wayland-seat.h"
 #include "wlr-data-control-unstable-v1.h"
@@ -177,8 +178,6 @@ wayland_connection_dispose(GObject *object)
 
     g_hash_table_remove_all(self->gobjects.seats);
 
-    wayland_connection_uninstall_source(self);
-
     G_OBJECT_CLASS(wayland_connection_parent_class)->dispose(object);
 }
 
@@ -186,6 +185,8 @@ static void
 wayland_connection_finalize(GObject *object)
 {
     WaylandConnection *self = WAYLAND_CONNECTION(object);
+
+    wayland_connection_uninstall_source(self);
 
     g_free(self->display.name);
     g_hash_table_unref(self->gobjects.seats);
@@ -214,7 +215,7 @@ wayland_connection_class_init(WaylandConnectionClass *class)
     obj_properties[PROP_TIMEOUT] = g_param_spec_uint(
         "timeout", "Timeout",
         "Timeout to determine if Wayland connection is unresponsive", 0,
-        G_MAXUINT, 1500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
+        G_MAXUINT, 500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
 
     g_object_class_install_properties(
@@ -255,6 +256,13 @@ wayland_connection_new(const gchar *display_name, GError **error)
 
         return NULL;
     }
+
+    // Bind timeout to gsettings. It may be NULL when during tests
+    if (SETTINGS != NULL)
+        g_settings_bind(
+            SETTINGS, "connection-timeout", ct, "timeout",
+            G_SETTINGS_BIND_DEFAULT
+        );
 
     return ct;
 }
@@ -454,6 +462,17 @@ use_first:
     }
 
     return seat;
+}
+
+/*
+ * Does not create a new reference
+ */
+GHashTable *
+wayland_connection_get_seats(WaylandConnection *self)
+{
+    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
+
+    return self->gobjects.seats;
 }
 
 gchar *

@@ -24,10 +24,11 @@ GType clippor_selection_type_get_type(void);
 
 ClipporClipboard *clippor_clipboard_new(const gchar *label);
 
-void
-clippor_clipboard_add_entry(ClipporClipboard *self, ClipporEntry *entry);
+void clippor_clipboard_add_entry(ClipporClipboard *self, ClipporEntry *entry);
 
 void clippor_clipboard_add_client(
     ClipporClipboard *self, const char *label, ClipporClient *client,
     ClipporSelectionType selection
 );
+
+ClipporEntry *clippor_clipboard_get_entry(ClipporClipboard *self, guint64 index);

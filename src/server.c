@@ -27,7 +27,7 @@ start_server(void)
 
     server->context = g_main_context_default();
     server->loop = g_main_loop_new(server->context, FALSE);
-    /* server->settings = g_settings_new("com.github.64bitman.clippor"); */
+    server->settings = g_settings_new("com.github.64bitman.clippor");
 
     server->ct = wayland_connection_new("", NULL);
     server->cb = clippor_clipboard_new("Untitled");

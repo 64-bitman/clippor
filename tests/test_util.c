@@ -3,6 +3,143 @@
 #include <stdio.h>
 #include <unistd.h>
 
+struct _TesterClient
+{
+    ClipporClient parent;
+
+    TesterClientSelection regular;
+    TesterClientSelection primary;
+};
+
+G_DEFINE_TYPE(TesterClient, tester_client, CLIPPOR_TYPE_CLIENT)
+
+static GBytes *tester_client_get_data(
+    ClipporClient *self, const char *mime_type, ClipporSelectionType selection,
+    GError **error
+);
+static GPtrArray *tester_client_get_mime_types(
+    ClipporClient *self, ClipporSelectionType selection
+);
+static gboolean tester_client_set_entry(
+    ClipporClient *self, ClipporEntry *entry, ClipporSelectionType selection,
+    GError **error
+);
+
+static void
+tester_client_dispose(GObject *object)
+{
+    G_OBJECT_CLASS(tester_client_parent_class)->dispose(object);
+}
+
+static void
+tester_client_finalize(GObject *object)
+{
+    TesterClient *self = TESTER_CLIENT(object);
+
+    g_ptr_array_free(self->regular.mime_types, TRUE);
+    g_ptr_array_free(self->primary.mime_types, TRUE);
+
+    g_weak_ref_clear(&self->regular.entry);
+    g_weak_ref_clear(&self->primary.entry);
+
+    G_OBJECT_CLASS(tester_client_parent_class)->finalize(object);
+}
+
+static void
+tester_client_class_init(TesterClientClass *class)
+{
+    ClipporClientClass *clipporclient_class = CLIPPOR_CLIENT_CLASS(class);
+    GObjectClass *gobject_class = G_OBJECT_CLASS(class);
+
+    clipporclient_class->get_data = tester_client_get_data;
+    clipporclient_class->get_mime_types = tester_client_get_mime_types;
+    clipporclient_class->set_entry = tester_client_set_entry;
+
+    gobject_class->dispose = tester_client_dispose;
+    gobject_class->finalize = tester_client_finalize;
+}
+
+static void
+tester_client_init(TesterClient *self)
+{
+    self->regular.mime_types = g_ptr_array_new_with_free_func(g_free);
+    self->primary.mime_types = g_ptr_array_new_with_free_func(g_free);
+
+    g_weak_ref_init(&self->regular.entry, NULL);
+    g_weak_ref_init(&self->primary.entry, NULL);
+}
+
+TesterClient *
+tester_client_new(void)
+{
+    return g_object_new(TESTER_TYPE_CLIENT, NULL);
+}
+
+static GBytes *
+tester_client_get_data(
+    ClipporClient *self, const char *mime_type G_GNUC_UNUSED,
+    ClipporSelectionType selection, GError **error G_GNUC_UNUSED
+)
+{
+    g_return_val_if_fail(TESTER_IS_CLIENT(self), NULL);
+
+    TesterClient *client = TESTER_CLIENT(self);
+
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+        return client->regular.data;
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+        return client->primary.data;
+    else
+        return NULL;
+}
+
+static GPtrArray *
+tester_client_get_mime_types(
+    ClipporClient *self, ClipporSelectionType selection
+)
+{
+    g_return_val_if_fail(TESTER_IS_CLIENT(self), NULL);
+
+    TesterClient *client = TESTER_CLIENT(self);
+
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+        return client->regular.mime_types;
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+        return client->primary.mime_types;
+    else
+        return NULL;
+}
+
+static gboolean
+tester_client_set_entry(
+    ClipporClient *self, ClipporEntry *entry, ClipporSelectionType selection,
+    GError **error G_GNUC_UNUSED
+)
+{
+    g_return_val_if_fail(TESTER_IS_CLIENT(self), FALSE);
+
+    TesterClient *client = TESTER_CLIENT(self);
+
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+        g_weak_ref_set(&client->regular.entry, entry);
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+        g_weak_ref_set(&client->primary.entry, entry);
+    return TRUE;
+}
+
+TesterClientSelection *
+tester_client_get_selection(TesterClient *self, ClipporSelectionType selection)
+{
+    g_return_val_if_fail(TESTER_IS_CLIENT(self), NULL);
+
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+        return &self->regular;
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+        return &self->primary;
+    else
+        return NULL;
+}
+
 static gchar *compositor_argv[] = {"labwc", "-c", "NONE", "-d", NULL};
 
 WaylandCompositor *

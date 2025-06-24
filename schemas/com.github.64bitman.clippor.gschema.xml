@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+    <schema id="com.github.64bitman.clippor" path="/com/github/64bitman/clippor/" gettext-domain="clippor">
+        <key name="max-entries" type="t">
+            <default>100</default>
+            <summary>Maximum number of entries to hold in history</summary>
+            <description></description>
+        </key>
+        <key name="connection-timeout" type="u">
+            <default>500</default>
+            <summary>Timeout for a connection to respond before it is deemed invalid</summary>
+            <description></description>
+        </key>
+        <key name="data-timeout" type="u">
+            <default>500</default>
+            <summary>Maximum timeout to wait when transferring data</summary>
+            <description></description>
+        </key>
+    </schema>
+</schemalist>

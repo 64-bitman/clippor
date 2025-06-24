@@ -1,5 +1,6 @@
 #pragma once
 
+#include "clippor-client.h"
 #include <glib-object.h>
 #include <glib.h>
 
@@ -10,6 +11,22 @@ typedef struct
     gchar *restore_display; // Previous display if we set $WAYLAND_DISPLAY to
                             // display.
 } WaylandCompositor;
+
+typedef struct
+{
+    GPtrArray *mime_types;
+    GBytes *data;
+    GWeakRef entry;
+} TesterClientSelection;
+
+#define TESTER_TYPE_CLIENT (tester_client_get_type())
+
+G_DECLARE_FINAL_TYPE(TesterClient, tester_client, TESTER, CLIENT, ClipporClient)
+
+TesterClient *tester_client_new(void);
+
+TesterClientSelection *
+tester_client_get_selection(TesterClient *self, ClipporSelectionType selection);
 
 WaylandCompositor *wayland_compositor_new(gboolean set_env);
 
