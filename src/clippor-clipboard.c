@@ -1,7 +1,12 @@
 #include "clippor-clipboard.h"
 #include "clippor-client.h"
 #include "clippor-entry.h"
+#include "database.h"
+#include "dbus-service.h"
+#include "global.h"
 #include <glib-object.h>
+#include <inttypes.h>
+#include <stdint.h>
 
 G_DEFINE_ENUM_TYPE(
     ClipporSelectionType, clippor_selection_type,
@@ -14,13 +19,13 @@ struct _ClipporClipboard
 {
     GObject parent;
 
-    gchar *label;
+    char *label;
 
     // Each key is a label with the value being a weak pointer to the client
     // object.
     GHashTable *clients;
 
-    guint64 max_entries;
+    uint64_t max_entries;
     GQueue *entries; // Most recent being at the head of the queue
 };
 
@@ -40,7 +45,7 @@ static void callback_client_unref(gpointer weak_ref);
 
 static void
 clippor_clipboard_set_property(
-    GObject *object, guint property_id, const GValue *value, GParamSpec *pspec
+    GObject *object, uint property_id, const GValue *value, GParamSpec *pspec
 )
 {
     ClipporClipboard *self = CLIPPOR_CLIPBOARD(object);
@@ -62,7 +67,7 @@ clippor_clipboard_set_property(
 
 static void
 clippor_clipboard_get_property(
-    GObject *object, guint property_id, GValue *value, GParamSpec *pspec
+    GObject *object, uint property_id, GValue *value, GParamSpec *pspec
 )
 {
     ClipporClipboard *self = CLIPPOR_CLIPBOARD(object);
@@ -148,12 +153,40 @@ clippor_clipboard_init(ClipporClipboard *self)
 }
 
 ClipporClipboard *
-clippor_clipboard_new(const gchar *label)
+clippor_clipboard_new(const char *label)
 {
-    g_return_val_if_fail(label != NULL, NULL);
+    g_assert(label != NULL);
 
     ClipporClipboard *cb =
         g_object_new(CLIPPOR_TYPE_CLIPBOARD, "label", label, NULL);
+
+    // Load entries from database
+    ClipporEntry *entry;
+    GError *error = NULL;
+
+    for (uint64_t i = 0; i < cb->max_entries; i++)
+    {
+        entry = database_deserialize_entry(cb, i, &error);
+
+        if (entry == NULL)
+        {
+            // Either we got an error or there are no more entries left
+            if (error != NULL)
+            {
+                // Dont message an error if database is just empty
+                if (error->code != DATABASE_ERROR_ROW_NONEXISTENT)
+                    g_message(
+                        "Failed loading entry for clipboard '%s': %s",
+                        cb->label, error->message
+                    );
+                g_error_free(error);
+            }
+            break;
+        }
+        g_queue_push_tail(cb->entries, entry);
+    }
+
+    dbus_service_add_clipboard(cb);
 
     return cb;
 }
@@ -168,33 +201,23 @@ callback_client_unref(gpointer weak_ref)
     g_free(weak_ref);
 }
 
-/*
- *
- */
-static guint64
-get_new_entry_index(ClipporClipboard *self)
+gboolean
+clippor_clipboard_add_entry(
+    ClipporClipboard *self, ClipporEntry *entry, GError **error
+)
 {
-    g_return_val_if_fail(CLIPPOR_IS_CLIPBOARD(self), 0);
-
-    ClipporEntry *entry = g_queue_peek_head(self->entries);
-
-    if (entry == NULL)
-        return 0;
-    else
-        return clippor_entry_get_index(entry) + 1;
-}
-
-void
-clippor_clipboard_add_entry(ClipporClipboard *self, ClipporEntry *entry)
-{
-    g_return_if_fail(CLIPPOR_IS_CLIPBOARD(self));
-    g_return_if_fail(CLIPPOR_IS_ENTRY(entry));
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(CLIPPOR_IS_ENTRY(entry));
+    g_assert(error == NULL || *error == NULL);
 
     // Shove out excess old entries until there is one spot available
     while (self->entries->length >= self->max_entries)
         g_object_unref(g_queue_pop_tail(self->entries));
 
     g_queue_push_head(self->entries, entry);
+
+    // Add to database
+    return database_add_entry(entry, error);
 }
 
 /*
@@ -209,16 +232,31 @@ callback_client_selection(
     ClipporClient *client = CLIPPOR_CLIENT(object);
     ClipporClipboard *cb = data;
 
-    ClipporEntry *entry = clippor_entry_new(get_new_entry_index(cb), object);
+    ClipporEntry *entry = clippor_entry_new(object, -1, NULL, cb);
 
     // Get mime types & data and add them to the entry
     GPtrArray *mime_types = clippor_client_get_mime_types(client, selection);
     GError *error = NULL;
 
     // Abort on any error
-    for (guint i = 0; i < mime_types->len; i++)
+    for (uint i = 0; i < mime_types->len; i++)
     {
         const char *mime_type = mime_types->pdata[i];
+
+        // Will be NULL during unit tests
+        if (ALLOWED_MIME_TYPES == NULL)
+            goto allowed;
+
+        // Check if mime type is allowed
+        for (uint k = 0; k < ALLOWED_MIME_TYPES->len; k++)
+        {
+            GRegex *regex = ALLOWED_MIME_TYPES->pdata[k];
+
+            if (g_regex_match(regex, mime_type, G_REGEX_MATCH_DEFAULT, NULL))
+                goto allowed;
+        }
+        continue;
+allowed:;
         GBytes *data =
             clippor_client_get_data(client, mime_type, selection, &error);
 
@@ -237,13 +275,46 @@ callback_client_selection(
             return;
         }
 
+        if (MIME_TYPE_GROUPS == NULL)
+            goto skip;
+        // Check if mime type has a group. If so then also add the other mime
+        // types in the group with the same GBytes object.
+        GHashTableIter iter;
+        GRegex *regex;
+        GPtrArray *group_mimes;
+
+        g_hash_table_iter_init(&iter, MIME_TYPE_GROUPS);
+
+        while (g_hash_table_iter_next(
+            &iter, (gpointer *)&regex, (gpointer *)&group_mimes
+        ))
+            if (g_regex_match(regex, mime_type, G_REGEX_MATCH_DEFAULT, NULL))
+            {
+                // Add mime types
+                for (uint k = 0; k < group_mimes->len; k++)
+                    clippor_entry_add_mime_type(
+                        entry, group_mimes->pdata[k], data
+                    );
+            }
+skip:
         clippor_entry_add_mime_type(entry, mime_type, data);
+        g_bytes_unref(data);
     }
 
     g_ptr_array_unref(mime_types);
-    clippor_clipboard_add_entry(cb, entry);
 
-    // Update clients (includes the source client too)
+    if (!clippor_clipboard_add_entry(cb, entry, &error))
+    {
+        g_message(
+            "Failed adding entry for clipboard '%s': %s", cb->label,
+            error->message
+        );
+        g_error_free(error);
+        return;
+    }
+
+    // Update clients (includes the source client too, because we need to keep
+    // their current entry up to date)
     GHashTableIter iter;
     GWeakRef *weak_ref;
 
@@ -268,9 +339,9 @@ clippor_clipboard_add_client(
     ClipporSelectionType selection
 )
 {
-    g_return_if_fail(CLIPPOR_IS_CLIPBOARD(self));
-    g_return_if_fail(G_IS_OBJECT(client));
-    g_return_if_fail(label != NULL);
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(G_IS_OBJECT(client));
+    g_assert(label != NULL);
 
     GWeakRef *ref = g_new(GWeakRef, 1);
 
@@ -293,16 +364,65 @@ clippor_clipboard_add_client(
     if (entry != NULL)
         clippor_client_set_entry(client, entry, selection, &error);
 
-    // Start listening for new selections
+    char *signal_name;
+
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+        signal_name = "selection::regular";
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+        signal_name = "selection::primary";
+    else
+        return;
+
+    // Start listening for new selections (for that specific selection)
     g_signal_connect(
-        client, "selection", G_CALLBACK(callback_client_selection), self
+        client, signal_name, G_CALLBACK(callback_client_selection), self
     );
 }
 
+/*
+ * May return NULL on error or if there is no such entry
+ */
 ClipporEntry *
-clippor_clipboard_get_entry(ClipporClipboard *self, guint64 index)
+clippor_clipboard_get_entry(
+    ClipporClipboard *self, uint64_t index, GError **error
+)
 {
-    g_return_val_if_fail(CLIPPOR_IS_CLIPBOARD(self), NULL);
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
 
-    return g_queue_peek_nth(self->entries, index);
+    ClipporEntry *entry;
+
+    // If index is outside the in memory list, search the database
+    if (index > self->max_entries)
+        entry = database_deserialize_entry(self, index, error);
+    else
+    {
+        entry = g_queue_peek_nth(self->entries, index);
+
+        if (entry == NULL)
+            g_set_error(
+                error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
+                "No such entry with index %" PRIu64 " in history", index
+            );
+    }
+
+    if (entry == NULL)
+        g_assert(error == NULL || *error != NULL);
+
+    return entry;
+}
+
+const char *
+clippor_clipboard_get_label(ClipporClipboard *self)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+
+    return self->label;
+}
+
+uint64_t
+clippor_clipboard_get_max_entries(ClipporClipboard *self)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+
+    return self->max_entries;
 }

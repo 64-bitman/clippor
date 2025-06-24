@@ -44,7 +44,7 @@ test_connection_seat(void)
     WaylandCompositor *wc = wayland_compositor_new(TRUE);
     WaylandConnection *ct = wayland_connection_new(wc->display, NULL);
 
-    const gchar *prev_xdgseat = g_getenv("XDG_SEAT");
+    const char *prev_xdgseat = g_getenv("XDG_SEAT");
 
     // Explicit display passed
 

@@ -10,7 +10,7 @@ typedef enum
     N_SIGNALS
 } ClipporClientSignal;
 
-static guint obj_signals[N_SIGNALS] = {0};
+static uint obj_signals[N_SIGNALS] = {0};
 
 static void
 clippor_client_class_init(ClipporClientClass *class)
@@ -22,8 +22,9 @@ clippor_client_class_init(ClipporClientClass *class)
     // Used to notify any clipboards that we have a new selection now
     obj_signals[SIGNAL_SELECTION] = g_signal_new(
         "selection", G_TYPE_FROM_CLASS(class),
-        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_HOOKS | G_SIGNAL_NO_RECURSE, 0, NULL,
-        NULL, NULL, G_TYPE_NONE, 1, CLIPPOR_TYPE_SELECTION_TYPE
+        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_HOOKS | G_SIGNAL_NO_RECURSE |
+            G_SIGNAL_DETAILED,
+        0, NULL, NULL, NULL, G_TYPE_NONE, 1, CLIPPOR_TYPE_SELECTION_TYPE
     );
 }
 static void
@@ -39,8 +40,8 @@ clippor_client_get_mime_types(
     ClipporClient *self, ClipporSelectionType selection
 )
 {
-    g_return_val_if_fail(CLIPPOR_IS_CLIENT(self), NULL);
-    g_return_val_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE, NULL);
+    g_assert(CLIPPOR_IS_CLIENT(self));
+    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
 
     ClipporClientClass *class = CLIPPOR_CLIENT_GET_CLASS(self);
 
@@ -80,11 +81,15 @@ clippor_client_set_entry(
     GError **error
 )
 {
-    g_return_val_if_fail(CLIPPOR_IS_CLIENT(self), FALSE);
-    g_return_val_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE, FALSE);
-    g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+    g_assert(CLIPPOR_IS_CLIENT(self));
+    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
+    g_assert(error == NULL || *error == NULL);
 
     ClipporClientClass *class = CLIPPOR_CLIENT_GET_CLASS(self);
+
+    //  Don't want to immediately steal the selection when there is a new one.
+    if (clippor_entry_is_from(entry) == G_OBJECT(self))
+        return TRUE;
 
     return class->set_entry == NULL
                ? FALSE

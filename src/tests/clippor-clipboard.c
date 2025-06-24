@@ -19,9 +19,11 @@ test_clippor_clipboard_add_client(void)
 
     sel->data = g_bytes_new_static("data", 4);
 
-    g_signal_emit_by_name(client, "selection", CLIPPOR_SELECTION_TYPE_REGULAR);
+    g_signal_emit_by_name(
+        client, "selection::regular", CLIPPOR_SELECTION_TYPE_REGULAR
+    );
 
-    ClipporEntry *entry = clippor_clipboard_get_entry(cb, 0);
+    ClipporEntry *entry = clippor_clipboard_get_entry(cb, 0, NULL);
 
     g_assert_nonnull(entry);
 

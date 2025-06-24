@@ -2,6 +2,7 @@
 
 #include "clippor-entry.h"
 #include <glib-object.h>
+#include <stdint.h>
 
 #define CLIPPOR_TYPE_CLIPBOARD (clippor_clipboard_get_type())
 
@@ -22,13 +23,21 @@ typedef struct _ClipporClient ClipporClient;
 
 GType clippor_selection_type_get_type(void);
 
-ClipporClipboard *clippor_clipboard_new(const gchar *label);
+ClipporClipboard *clippor_clipboard_new(const char *label);
 
-void clippor_clipboard_add_entry(ClipporClipboard *self, ClipporEntry *entry);
+gboolean clippor_clipboard_add_entry(
+    ClipporClipboard *self, ClipporEntry *entry, GError **error
+);
 
 void clippor_clipboard_add_client(
     ClipporClipboard *self, const char *label, ClipporClient *client,
     ClipporSelectionType selection
 );
 
-ClipporEntry *clippor_clipboard_get_entry(ClipporClipboard *self, guint64 index);
+ClipporEntry *clippor_clipboard_get_entry(
+    ClipporClipboard *self, uint64_t index, GError **error
+);
+
+const char *clippor_clipboard_get_label(ClipporClipboard *self);
+
+uint64_t clippor_clipboard_get_max_entries(ClipporClipboard *self);

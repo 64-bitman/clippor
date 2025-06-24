@@ -22,7 +22,9 @@ G_DEFINE_QUARK(wayland_seat_error_quark, wayland_seat_error)
 
 typedef struct
 {
-    const gchar *name; // Set at construct time
+    WaylandSeat *parent;
+
+    const char *name; // Set at construct time
     ClipporSelectionType type;
 
     GWeakRef entry; // Current entry for selection. We use a weak
@@ -41,10 +43,10 @@ struct _WaylandSeat
 
     struct wl_seat *proxy;
 
-    gchar *name;
-    guint32 numerical_name;
+    char *name;
+    uint32_t numerical_name;
     enum wl_seat_capability capabilities;
-    gint timeout; // Timeout when waiting for data.
+    int timeout; // Timeout when waiting for data.
 
     WaylandConnection *ct; // Parent connection
 
@@ -74,9 +76,9 @@ wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection);
 static gboolean wayland_seat_clipboard_setup(WaylandSeat *self, GError **error);
 static void wayland_seat_clipboard_unsetup(WaylandSeat *self);
 
-static GBytes *receive_data(int32_t fd, gint timeout, GError **error);
+static GBytes *receive_data(int32_t fd, int timeout, GError **error);
 static gboolean
-send_data(int32_t fd, GBytes *data, gint timeout, GError **error);
+send_data(int32_t fd, GBytes *data, int timeout, GError **error);
 
 static gboolean wayland_seat_update_selection(
     WaylandSeat *self, ClipporSelectionType selection, gboolean ignore_if_none,
@@ -97,7 +99,7 @@ static gboolean wayland_seat_client_set_entry(
 
 static void
 wayland_seat_set_property(
-    GObject *object, guint property_id, const GValue *value, GParamSpec *pspec
+    GObject *object, uint property_id, const GValue *value, GParamSpec *pspec
 )
 {
     WaylandSeat *self = WAYLAND_SEAT(object);
@@ -115,7 +117,7 @@ wayland_seat_set_property(
 
 static void
 wayland_seat_get_property(
-    GObject *object, guint property_id, GValue *value, GParamSpec *pspec
+    GObject *object, uint property_id, GValue *value, GParamSpec *pspec
 )
 {
     WaylandSeat *self = WAYLAND_SEAT(object);
@@ -192,6 +194,9 @@ wayland_seat_init(WaylandSeat *self)
     self->clipboard.regular.type = CLIPPOR_SELECTION_TYPE_REGULAR;
     self->clipboard.primary.type = CLIPPOR_SELECTION_TYPE_PRIMARY;
 
+    self->clipboard.regular.parent = self;
+    self->clipboard.primary.parent = self;
+
     g_weak_ref_init(&self->clipboard.regular.entry, NULL);
     g_weak_ref_init(&self->clipboard.primary.entry, NULL);
 }
@@ -208,7 +213,7 @@ struct wl_seat_listener wl_seat_listener = {
 
 WaylandSeat *
 wayland_seat_new(
-    WaylandConnection *ct, struct wl_seat *seat_proxy, guint32 numerical_name,
+    WaylandConnection *ct, struct wl_seat *seat_proxy, uint32_t numerical_name,
     GError **error
 )
 {
@@ -261,7 +266,7 @@ wl_seat_listener_name(
     obj->name = g_strdup(name);
 }
 
-gchar *
+char *
 wayland_seat_get_name(WaylandSeat *self)
 {
     g_return_val_if_fail(WAYLAND_IS_SEAT(self), NULL);
@@ -269,7 +274,7 @@ wayland_seat_get_name(WaylandSeat *self)
     return self->name;
 }
 
-guint32
+uint32_t
 wayland_seat_get_numerical_name(WaylandSeat *self)
 {
     // Just give a warning message
@@ -413,7 +418,6 @@ wayland_data_device_listener_selection(
         GError *error = NULL;
 
         // Selection cleared/empty.
-        sel->source = NULL;
         sel->offer = NULL;
 
         // Set selection to latest entry (which should have the same data as the
@@ -421,7 +425,7 @@ wayland_data_device_listener_selection(
         // no entry then nothing is done.
         if (!wayland_seat_update_selection(seat, selection, TRUE, &error))
         {
-            g_info(
+            g_message(
                 "Failed updating selection for Wayland seat '%s': %s",
                 seat->name, error->message
             );
@@ -440,7 +444,16 @@ wayland_data_device_listener_selection(
 
     sel->offer = offer;
 
-    g_signal_emit_by_name(seat, "selection", selection);
+    char *signal_name;
+
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+        signal_name = "selection::regular";
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+        signal_name = "selection::primary";
+    else
+        return;
+
+    g_signal_emit_by_name(seat, signal_name, selection);
 }
 
 static void
@@ -471,33 +484,60 @@ data_source_event_send(
 )
 {
     GError *error = NULL;
-    ClipporEntry *entry = data;
-    GBytes *stuff =
-        g_hash_table_lookup(clippor_entry_get_mime_types(entry), mime_type);
+    WaylandSeatSelection *sel = data;
+    ClipporEntry *entry = g_weak_ref_get(&sel->entry);
 
-    if (!send_data(fd, stuff, 3000, &error))
+    GBytes *stuff = clippor_entry_get_data(entry, mime_type, &error);
+
+    if (stuff == NULL)
+    {
+        if (error != NULL)
+        {
+            g_message(
+                "Data source send event failed, cannot get '%s' data: %s",
+                mime_type, error->message
+            );
+            g_error_free(error);
+        }
+        else
+            // No entry for mime type exists in database
+            g_message(
+                "No entry exists for '%s' in database for entry id '%s'",
+                mime_type, clippor_entry_get_id(entry)
+            );
+
+        goto exit;
+    }
+
+    if (!send_data(fd, stuff, sel->parent->timeout, &error))
     {
         g_assert(error != NULL);
-        g_info("Data source send event failed: %s", error->message);
+        g_message("Data source send event failed: %s", error->message);
         g_error_free(error);
     }
+
+exit:
+    g_object_unref(entry);
 
     close(fd);
 }
 
 static void
-data_source_event_cancelled(void *data G_GNUC_UNUSED, WaylandDataSource *source)
+data_source_event_cancelled(void *data, WaylandDataSource *source)
 {
+    WaylandSeatSelection *sel = data;
+
     wayland_data_source_destroy(source);
-    // No need to set to NULL in WaylandSeat because we will receive selection
-    // event and set source to NULL.
+
+    if (source == sel->source)
+        sel->source = NULL;
 }
 
 /*
  * Returns NULL on error
  */
 static GBytes *
-receive_data(int32_t fd, gint timeout, GError **error)
+receive_data(int32_t fd, int timeout, GError **error)
 {
     g_assert(error == NULL || *error == NULL);
     g_assert(fd >= 0);
@@ -517,7 +557,7 @@ receive_data(int32_t fd, gint timeout, GError **error)
     }
 
     GError *err = NULL;
-    guint8 *bytes = g_malloc(8192);
+    uint8_t *bytes = g_malloc(8192);
     ssize_t r = 0;
 
     // Only poll before reading when we first start, then we do non-blocking
@@ -565,13 +605,13 @@ poll_data:
 }
 
 static gboolean
-send_data(int32_t fd, GBytes *data, gint timeout, GError **error)
+send_data(int32_t fd, GBytes *data, int timeout, GError **error)
 {
     g_assert(data != NULL);
     g_assert(fd >= 0);
     g_assert(error == NULL || *error == NULL);
 
-    gsize length;
+    size_t length;
     const char *stuff = g_bytes_get_data(data, &length);
 
     GPollFD pfd = {.fd = fd, .events = G_IO_OUT};
@@ -640,11 +680,11 @@ wayland_seat_update_selection(
     sel->source =
         wayland_data_device_manager_create_data_source(self->clipboard.manager);
 
-    wayland_data_source_add_listener(sel->source, &data_source_listener, entry);
+    wayland_data_source_add_listener(sel->source, &data_source_listener, sel);
 
     GHashTable *mime_types = clippor_entry_get_mime_types(entry);
     GHashTableIter iter;
-    const gchar *mime_type;
+    const char *mime_type;
 
     g_object_unref(entry);
     g_hash_table_iter_init(&iter, mime_types);
@@ -718,7 +758,7 @@ wayland_seat_client_get_data(
     close(fds[1]);
 
     if (wayland_connection_flush(seat->ct, error))
-        data = receive_data(fds[0], 3000, error);
+        data = receive_data(fds[0], seat->timeout, error);
 
     close(fds[0]);
 
@@ -735,11 +775,8 @@ wayland_seat_client_set_entry(
 
     WaylandSeat *seat = WAYLAND_SEAT(self);
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
-    g_weak_ref_set(&sel->entry, entry);
 
-    //  Don't want to immediately steal the selection when there is a new one.
-    if (clippor_entry_is_from(entry) == G_OBJECT(seat))
-        return TRUE;
+    g_weak_ref_set(&sel->entry, entry);
 
     if (!wayland_seat_update_selection(seat, sel->type, FALSE, error))
     {

@@ -22,10 +22,10 @@ GQuark wayland_seat_error_quark(void);
 G_DECLARE_FINAL_TYPE(WaylandSeat, wayland_seat, WAYLAND, SEAT, ClipporClient)
 
 WaylandSeat *wayland_seat_new(
-    WaylandConnection *ct, struct wl_seat *seat_proxy, guint32 numerical_name,
+    WaylandConnection *ct, struct wl_seat *seat_proxy, uint32_t numerical_name,
     GError **error
 );
 
-gchar *wayland_seat_get_name(WaylandSeat *self);
-guint32 wayland_seat_get_numerical_name(WaylandSeat *self);
+char *wayland_seat_get_name(WaylandSeat *self);
+uint32_t wayland_seat_get_numerical_name(WaylandSeat *self);
 struct wl_seat *wayland_seat_get_proxy(WaylandSeat *self);

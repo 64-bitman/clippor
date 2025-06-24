@@ -64,13 +64,13 @@ struct _WaylandConnection
 {
     GObject parent;
 
-    guint timeout; // In milliseconds
+    uint timeout; // In milliseconds
 
     GSource *source;
     struct
     {
         struct wl_display *proxy;
-        gchar *name;
+        char *name;
     } display;
 
     struct
@@ -121,7 +121,7 @@ static struct wl_registry_listener wl_registry_listener = {
 
 static void
 wayland_connection_set_property(
-    GObject *object, guint property_id, const GValue *value, GParamSpec *pspec
+    GObject *object, uint property_id, const GValue *value, GParamSpec *pspec
 )
 {
     WaylandConnection *self = WAYLAND_CONNECTION(object);
@@ -131,7 +131,7 @@ wayland_connection_set_property(
     {
     case PROP_DISPLAY:
     {
-        const gchar *display = g_value_get_string(value);
+        const char *display = g_value_get_string(value);
 
         if (display == NULL || g_strcmp0(display, "") == 0)
             display = g_getenv("WAYLAND_DISPLAY");
@@ -152,7 +152,7 @@ wayland_connection_set_property(
 
 static void
 wayland_connection_get_property(
-    GObject *object, guint property_id, GValue *value, GParamSpec *pspec
+    GObject *object, uint property_id, GValue *value, GParamSpec *pspec
 )
 {
     WaylandConnection *self = WAYLAND_CONNECTION(object);
@@ -237,7 +237,7 @@ wayland_connection_init(WaylandConnection *self)
  * If display is NULL or an empty string, $WAYLAND_DISPLAY will be used
  */
 WaylandConnection *
-wayland_connection_new(const gchar *display_name, GError **error)
+wayland_connection_new(const char *display_name, GError **error)
 {
     g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
@@ -416,7 +416,7 @@ wl_registry_listener_global_remove(
     }
 }
 
-gint
+int
 wayland_connection_get_fd(WaylandConnection *self)
 {
     g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), -1);
@@ -426,40 +426,25 @@ wayland_connection_get_fd(WaylandConnection *self)
 
 /*
  * Returns NULL if no seats exist. Does not create a new reference of seat. If
- * name is NULL or empty, $XDG_SEAT is used. If $XDG_SEAT is not set or is a
- * non-existent seat, then the first seat found is used instead.
+ * name is NULL or empty, then the first seat found is used.
  *
  */
 WaylandSeat *
-wayland_connection_get_seat(WaylandConnection *self, const gchar *name)
+wayland_connection_get_seat(WaylandConnection *self, const char *name)
 {
     g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
 
-    if (name == NULL || g_strcmp0(name, "") == 0)
-    {
-        const gchar *xdgseat = g_getenv("XDG_SEAT");
-
-        if (xdgseat != NULL)
-            name = xdgseat;
-        else
-            name = NULL;
-    }
     WaylandSeat *seat = NULL;
 
-    if (name != NULL)
-    {
-        seat = g_hash_table_lookup(self->gobjects.seats, name);
-        if (seat == NULL)
-            goto use_first;
-    }
-    else
+    if (name == NULL || g_strcmp0(name, "") == 0)
     {
         GHashTableIter iter;
 
-use_first:
         g_hash_table_iter_init(&iter, self->gobjects.seats);
         g_hash_table_iter_next(&iter, NULL, (void **)&seat);
     }
+    else
+        seat = g_hash_table_lookup(self->gobjects.seats, name);
 
     return seat;
 }
@@ -475,7 +460,7 @@ wayland_connection_get_seats(WaylandConnection *self)
     return self->gobjects.seats;
 }
 
-gchar *
+char *
 wayland_connection_get_display_name(WaylandConnection *self)
 {
     g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
@@ -538,12 +523,12 @@ wayland_connection_flush(WaylandConnection *self, GError **error)
                 g_strerror(errno)
             );
 
-        break;
+        return FALSE;
     }
     return TRUE;
 }
 
-gint
+int
 wayland_connection_dispatch(WaylandConnection *self, GError **error)
 {
     g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
@@ -638,7 +623,7 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
 
 static void
 wl_callback_listener_done(
-    void *data, struct wl_callback *callback, guint32 cb_data G_GNUC_UNUSED
+    void *data, struct wl_callback *callback, uint32_t cb_data G_GNUC_UNUSED
 )
 {
     *((gboolean *)data) = TRUE;
@@ -675,7 +660,7 @@ wayland_connection_roundtrip(WaylandConnection *self, GError **error)
 
     wl_callback_add_listener(callback, &vwl_callback_listener, &done);
 
-    gint64 start, now;
+    int64_t start, now;
 
     start = g_get_monotonic_time();
 
@@ -722,7 +707,7 @@ wayland_connection_roundtrip(WaylandConnection *self, GError **error)
 }
 
 static gboolean
-wayland_connection_source_prepare(GSource *source, gint *timeout_)
+wayland_connection_source_prepare(GSource *source, int *timeout_)
 {
     WaylandConnectionSource *ws = (WaylandConnectionSource *)source;
     WaylandConnection *ct = g_weak_ref_get(&ws->ct);
@@ -862,7 +847,7 @@ wayland_connection_install_source(
         &wayland_connection_source_funcs, sizeof(WaylandConnectionSource)
     );
     WaylandConnectionSource *ws = (WaylandConnectionSource *)source;
-    gchar *name = g_strdup_printf(
+    char *name = g_strdup_printf(
         "Wayland display '%s'", wayland_connection_get_display_name(self)
     );
 

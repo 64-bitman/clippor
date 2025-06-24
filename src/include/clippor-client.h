@@ -15,7 +15,7 @@ struct _ClipporClientClass
     GObjectClass parent_class;
 
     // Properties
-    gchar *label;
+    char *label;
 
     // Non-properties, these are set via a class method
     struct
@@ -32,7 +32,7 @@ struct _ClipporClientClass
         ClipporClient *self, ClipporSelectionType selection
     );
     GBytes *(*get_data)(
-        ClipporClient *self, const gchar *mime_type,
+        ClipporClient *self, const char *mime_type,
         ClipporSelectionType selection, GError **error
     );
     gboolean (*set_entry)(

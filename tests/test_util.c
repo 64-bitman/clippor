@@ -140,7 +140,7 @@ tester_client_get_selection(TesterClient *self, ClipporSelectionType selection)
         return NULL;
 }
 
-static gchar *compositor_argv[] = {"labwc", "-c", "NONE", "-d", NULL};
+static char *compositor_argv[] = {"labwc", "-c", "NONE", "-d", NULL};
 
 WaylandCompositor *
 wayland_compositor_new(gboolean set_env)
@@ -149,10 +149,10 @@ wayland_compositor_new(gboolean set_env)
 
     WaylandCompositor *wc = g_new0(WaylandCompositor, 1);
     gboolean ret;
-    gint stderr_fd;
+    int stderr_fd;
     FILE *out;
 
-    gchar **environment = g_get_environ();
+    char **environment = g_get_environ();
 
     environment =
         g_environ_setenv(environment, "WLR_BACKENDS", "headless", TRUE);
@@ -226,7 +226,8 @@ wayland_compositor_destroy(WaylandCompositor *self)
 void
 wayland_compositor_set_env(WaylandCompositor *self)
 {
-    g_assert(self != NULL && self->display != NULL);
+    g_assert(self != NULL);
+    g_assert(self->display != NULL);
 
     self->restore_display = g_strdup(g_getenv("WAYLAND_DISPLAY"));
 
@@ -244,21 +245,21 @@ wayland_compositor_restore_env(WaylandCompositor *self)
 }
 
 void
-wl_copy(gboolean primary, gchar *format, ...)
+wl_copy(gboolean primary, char *format, ...)
 {
-    gchar *primary_flag = primary ? "-p" : NULL;
+    char *primary_flag = primary ? "-p" : NULL;
 
     va_list args;
 
     va_start(args, format);
 
-    gchar *text = g_strdup_vprintf(format, args);
+    char *text = g_strdup_vprintf(format, args);
 
     va_end(args);
 
-    gchar *cmdline[] = {"wl-copy", text, primary_flag, NULL};
+    char *cmdline[] = {"wl-copy", text, primary_flag, NULL};
     GError *error = NULL;
-    gint status;
+    int status;
 
     gboolean ret = g_spawn_sync(
         NULL, cmdline, NULL,
@@ -274,14 +275,14 @@ wl_copy(gboolean primary, gchar *format, ...)
     g_free(text);
 }
 
-gchar *
-wl_paste(gboolean primary, gboolean newline, gchar *mime_type)
+char *
+wl_paste(gboolean primary, gboolean newline, char *mime_type)
 {
-    gint i = 1;
-    gchar *cmdline[] = {"wl-paste", NULL, NULL, NULL, NULL, NULL};
+    int i = 1;
+    char *cmdline[] = {"wl-paste", NULL, NULL, NULL, NULL, NULL};
     GError *error = NULL;
-    gchar *output = NULL;
-    gint status;
+    char *output = NULL;
+    int status;
 
     if (primary)
         cmdline[i++] = "-p";

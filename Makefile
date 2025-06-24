@@ -23,7 +23,7 @@ run: all
 	@GSETTINGS_SCHEMA_DIR=schemas/ LSAN_OPTIONS=fast_unwind_on_malloc=0 \
 						 build/clippor --debug --server
 
-test:
+test: all
 	meson test --print-errorlogs -C build/
 
 .PHONY: all reset clean run test

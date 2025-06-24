@@ -59,19 +59,19 @@ typedef struct
 } WaylandDataOfferListener;
 
 WaylandConnection *
-wayland_connection_new(const gchar *display_name, GError **error);
+wayland_connection_new(const char *display_name, GError **error);
 
 typedef struct _WaylandSeat WaylandSeat;
 
-gint wayland_connection_get_fd(WaylandConnection *self);
+int wayland_connection_get_fd(WaylandConnection *self);
 WaylandSeat *
-wayland_connection_get_seat(WaylandConnection *self, const gchar *name);
+wayland_connection_get_seat(WaylandConnection *self, const char *name);
 GHashTable *wayland_connection_get_seats(WaylandConnection *self);
-gchar *wayland_connection_get_display_name(WaylandConnection *self);
+char *wayland_connection_get_display_name(WaylandConnection *self);
 struct wl_display *wayland_connection_get_display(WaylandConnection *self);
 
 gboolean wayland_connection_flush(WaylandConnection *ct, GError **error);
-gint wayland_connection_dispatch(WaylandConnection *ct, GError **error);
+int wayland_connection_dispatch(WaylandConnection *ct, GError **error);
 gboolean wayland_connection_roundtrip(WaylandConnection *ct, GError **error);
 
 void wayland_connection_install_source(

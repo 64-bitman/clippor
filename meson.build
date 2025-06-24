@@ -2,7 +2,7 @@ project('clippor', 'c',
   version: 'v0.0.1',
   license: 'MIT',
   license_files: 'LICENSE',
-  default_options: ['c_std=gnu11', 'warning_level=3'],
+  default_options: ['c_std=gnu11', 'warning_level=2'],
   meson_version: '>= 1.1.0'
   )
 
@@ -10,6 +10,7 @@ if get_option('buildtype').startswith('debug')
   add_project_arguments('-DDEBUG',
     # '-pg',
     '-DG_LOG_USE_STRUCTURED',
+    '-DDATABASE_VERSION=0',
     '-DVERSION="' + meson.project_version() + '"',
     language : 'c')
   # add_project_link_arguments('-pg', language: 'c')
