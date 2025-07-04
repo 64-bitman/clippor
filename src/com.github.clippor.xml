@@ -3,7 +3,7 @@
 <node>
     <interface name='com.github.clippor'>
         <method name='GetEntryInfo'>
-            <arg name='index' type='t' direction='in'/>
+            <arg name='index' type='x' direction='in'/>
             <arg name='id' type='s' direction='out'/>
             <arg name='creation_time' type='x' direction='out'/>
             <arg name='last_used_time' type='x' direction='out'/>
@@ -13,7 +13,7 @@
         <method name='GetMimeTypeData'>
             <arg name='id' type='s' direction='in'/>
             <arg name='mime_type' type='s' direction='in'/>
-            <arg name='fd' type='h' direction='out'/>
+            <arg name='fd' type='h' direction='in'/>
         </method>
         <method name='GetEntriesCount'>
             <arg name='count' type='t' direction='out'/>

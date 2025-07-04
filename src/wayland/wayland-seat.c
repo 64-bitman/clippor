@@ -1,3 +1,4 @@
+#include "util.h"
 #include "wayland-seat.h"
 #include "global.h"
 #include "wayland-connection.h"
@@ -75,10 +76,6 @@ wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection);
 
 static gboolean wayland_seat_clipboard_setup(WaylandSeat *self, GError **error);
 static void wayland_seat_clipboard_unsetup(WaylandSeat *self);
-
-static GBytes *receive_data(int32_t fd, int timeout, GError **error);
-static gboolean
-send_data(int32_t fd, GBytes *data, int timeout, GError **error);
 
 static gboolean wayland_seat_update_selection(
     WaylandSeat *self, ClipporSelectionType selection, gboolean ignore_if_none,
@@ -509,7 +506,7 @@ data_source_event_send(
         goto exit;
     }
 
-    if (!send_data(fd, stuff, sel->parent->timeout, &error))
+    if (!util_send_data(fd, stuff, sel->parent->timeout, &error))
     {
         g_assert(error != NULL);
         g_message("Data source send event failed: %s", error->message);
@@ -517,6 +514,7 @@ data_source_event_send(
     }
 
 exit:
+    g_bytes_unref(stuff);
     g_object_unref(entry);
 
     close(fd);
@@ -531,118 +529,6 @@ data_source_event_cancelled(void *data, WaylandDataSource *source)
 
     if (source == sel->source)
         sel->source = NULL;
-}
-
-/*
- * Returns NULL on error
- */
-static GBytes *
-receive_data(int32_t fd, int timeout, GError **error)
-{
-    g_assert(error == NULL || *error == NULL);
-    g_assert(fd >= 0);
-
-    GByteArray *data = g_byte_array_new();
-    GPollFD pfd = {.fd = fd, .events = G_IO_IN};
-
-    // Make pipe (read end) non-blocking
-    if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == -1)
-    {
-        g_set_error(
-            error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
-            "fcntl() failed: %s", g_strerror(errno)
-        );
-        g_byte_array_unref(data);
-        return NULL;
-    }
-
-    GError *err = NULL;
-    uint8_t *bytes = g_malloc(8192);
-    ssize_t r = 0;
-
-    // Only poll before reading when we first start, then we do non-blocking
-    // reads and check for EAGAIN or EINTR to signal to poll again.
-    goto poll_data;
-
-    while (errno = 0, TRUE)
-    {
-        r = read(fd, bytes, 8192);
-
-        if (r == 0)
-            break;
-        else if (r < 0)
-        {
-            if (errno == EAGAIN || errno == EINTR)
-            {
-poll_data:
-                if (g_poll(&pfd, 1, timeout) > 0)
-                    continue;
-                else
-                    g_set_error(
-                        &err, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
-                        "g_poll() failed: %s", g_strerror(errno)
-                    );
-                break;
-            }
-            g_set_error(
-                &err, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
-                "read() failed: %s", g_strerror(errno)
-            );
-            break;
-        }
-        g_byte_array_append(data, bytes, r);
-    }
-    g_free(bytes);
-
-    if (err != NULL)
-    {
-        g_propagate_error(error, err);
-        g_byte_array_unref(data);
-        return NULL;
-    }
-
-    return g_byte_array_free_to_bytes(data);
-}
-
-static gboolean
-send_data(int32_t fd, GBytes *data, int timeout, GError **error)
-{
-    g_assert(data != NULL);
-    g_assert(fd >= 0);
-    g_assert(error == NULL || *error == NULL);
-
-    size_t length;
-    const char *stuff = g_bytes_get_data(data, &length);
-
-    GPollFD pfd = {.fd = fd, .events = G_IO_OUT};
-    ssize_t written = 0;
-    size_t total = 0;
-
-    while (errno = 0, total < length && g_poll(&pfd, 1, timeout) > 0)
-    {
-        written = write(fd, stuff + total, length - total);
-
-        if (written == -1)
-        {
-            g_set_error(
-                error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_SEND,
-                "write() failed: %s", g_strerror(errno)
-            );
-            break;
-        }
-        total += written;
-    }
-
-    if (errno != 0)
-        g_set_error(
-            error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_SEND,
-            "g_poll() failed: %s", g_strerror(errno)
-        );
-
-    if (*error != NULL)
-        return FALSE;
-
-    return TRUE;
 }
 
 /*
@@ -758,7 +644,7 @@ wayland_seat_client_get_data(
     close(fds[1]);
 
     if (wayland_connection_flush(seat->ct, error))
-        data = receive_data(fds[0], seat->timeout, error);
+        data = util_receive_data(fds[0], seat->timeout, error);
 
     close(fds[0]);
 

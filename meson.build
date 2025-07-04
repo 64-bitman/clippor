@@ -9,12 +9,15 @@ project('clippor', 'c',
 if get_option('buildtype').startswith('debug')
   add_project_arguments('-DDEBUG',
     # '-pg',
-    '-DG_LOG_USE_STRUCTURED',
-    '-DDATABASE_VERSION=0',
-    '-DVERSION="' + meson.project_version() + '"',
     language : 'c')
   # add_project_link_arguments('-pg', language: 'c')
 endif
+
+add_project_arguments(
+  '-DG_LOG_USE_STRUCTURED',
+  '-DDATABASE_VERSION=0',
+  '-DVERSION="' + meson.project_version() + '"',
+  language: 'c')
 
 env = environment()
 

@@ -1,6 +1,8 @@
 #include "global.h"
+#include <fcntl.h>
 #include <gio/gio.h>
 #include <glib.h>
+#include <inttypes.h>
 
 GSettings *SETTINGS = NULL;
 GPtrArray *ALLOWED_MIME_TYPES = NULL; // Array of regexes

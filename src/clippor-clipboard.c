@@ -25,7 +25,7 @@ struct _ClipporClipboard
     // object.
     GHashTable *clients;
 
-    uint64_t max_entries;
+    int64_t max_entries;
     GQueue *entries; // Most recent being at the head of the queue
 };
 
@@ -57,7 +57,7 @@ clippor_clipboard_set_property(
         self->label = g_value_dup_string(value);
         break;
     case PROP_MAX_ENTRIES:
-        self->max_entries = g_value_get_uint64(value);
+        self->max_entries = g_value_get_int64(value);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -78,7 +78,7 @@ clippor_clipboard_get_property(
         g_value_set_string(value, self->label);
         break;
     case PROP_MAX_ENTRIES:
-        g_value_set_uint64(value, self->max_entries);
+        g_value_set_int64(value, self->max_entries);
         break;
     case PROP_CLIENTS:
         g_value_set_boxed(value, self->clients);
@@ -132,9 +132,9 @@ clippor_clipboard_class_init(ClipporClipboardClass *class)
         "selections", "Selections", "Selections attached to this clipboard",
         G_TYPE_HASH_TABLE, G_PARAM_READABLE
     );
-    obj_properties[PROP_MAX_ENTRIES] = g_param_spec_uint64(
+    obj_properties[PROP_MAX_ENTRIES] = g_param_spec_int64(
         "max-entries", "Max entries",
-        "Maximum amount of entries stored in memory", 1, G_MAXUINT64, 10,
+        "Maximum amount of entries stored in memory", 1, G_MAXINT64, 10,
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
 
@@ -164,9 +164,9 @@ clippor_clipboard_new(const char *label)
     ClipporEntry *entry;
     GError *error = NULL;
 
-    for (uint64_t i = 0; i < cb->max_entries; i++)
+    for (int64_t i = 0; i < cb->max_entries; i++)
     {
-        entry = database_deserialize_entry(cb, i, &error);
+        entry = database_deserialize_entry(cb, i, NULL, &error);
 
         if (entry == NULL)
         {
@@ -384,7 +384,7 @@ clippor_clipboard_add_client(
  */
 ClipporEntry *
 clippor_clipboard_get_entry(
-    ClipporClipboard *self, uint64_t index, GError **error
+    ClipporClipboard *self, int64_t index, GError **error
 )
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
@@ -393,7 +393,7 @@ clippor_clipboard_get_entry(
 
     // If index is outside the in memory list, search the database
     if (index > self->max_entries)
-        entry = database_deserialize_entry(self, index, error);
+        entry = database_deserialize_entry(self, index, NULL, error);
     else
     {
         entry = g_queue_peek_nth(self->entries, index);
@@ -403,7 +403,26 @@ clippor_clipboard_get_entry(
                 error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
                 "No such entry with index %" PRIu64 " in history", index
             );
+
+        if (entry != NULL)
+            g_object_ref(entry);
     }
+
+    if (entry == NULL)
+        g_assert(error == NULL || *error != NULL);
+
+    return entry;
+}
+
+ClipporEntry *
+clippor_clipboard_get_entry_by_id(
+    ClipporClipboard *self, const char *id, GError **error
+)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(id != NULL);
+
+    ClipporEntry *entry = database_deserialize_entry(self, 0, id, error);
 
     if (entry == NULL)
         g_assert(error == NULL || *error != NULL);
@@ -419,7 +438,7 @@ clippor_clipboard_get_label(ClipporClipboard *self)
     return self->label;
 }
 
-uint64_t
+int64_t
 clippor_clipboard_get_max_entries(ClipporClipboard *self)
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(self));

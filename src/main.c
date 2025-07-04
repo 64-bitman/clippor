@@ -25,8 +25,13 @@ static GOptionEntry help_entries[] = {
 static gboolean DONE = FALSE;
 
 static gboolean on_sigint(gpointer user_data);
-static void do_exit(void);
+static void exit_handler(void);
 static void weak_ref_cb(gpointer data, GObject *object);
+
+
+void allowed_mime_types_update(void);
+void mime_type_groups_update(void);
+
 static void
 allowed_mime_types_changed_cb(GObject *object, char *key, gpointer data);
 static void
@@ -73,8 +78,8 @@ main(int argc, char *argv[])
             SETTINGS, "changed::mime-type-groups",
             G_CALLBACK(mime_type_groups_changed_cb), NULL
         );
-        allowed_mime_types_changed_cb(NULL, NULL, NULL);
-        mime_type_groups_changed_cb(NULL, NULL, NULL);
+        allowed_mime_types_update();
+        mime_type_groups_update();
 
         if (!database_init(&error))
         {
@@ -131,7 +136,7 @@ main(int argc, char *argv[])
 
         g_main_loop_run(MAIN_LOOP);
 
-        do_exit();
+        exit_handler();
     }
 
 exit:
@@ -139,7 +144,7 @@ exit:
     {
         g_critical("%s\n", error->message);
         g_error_free(error);
-        do_exit();
+        exit_handler();
         return EXIT_FAILURE;
     }
 
@@ -149,12 +154,12 @@ exit:
 static gboolean
 on_sigint(gpointer user_data G_GNUC_UNUSED)
 {
-    do_exit();
+    exit_handler();
     return G_SOURCE_REMOVE;
 }
 
 static void
-do_exit(void)
+exit_handler(void)
 {
     if (DONE)
         return;
@@ -184,11 +189,8 @@ weak_ref_cb(gpointer data, GObject *object)
     g_ptr_array_remove(data, object);
 }
 
-static void
-allowed_mime_types_changed_cb(
-    GObject *object G_GNUC_UNUSED, char *key G_GNUC_UNUSED,
-    gpointer data G_GNUC_UNUSED
-)
+void
+allowed_mime_types_update(void)
 {
     char **arr = g_settings_get_strv(SETTINGS, "allowed-mime-types");
 
@@ -222,11 +224,8 @@ allowed_mime_types_changed_cb(
     g_strfreev(arr);
 }
 
-static void
-mime_type_groups_changed_cb(
-    GObject *object G_GNUC_UNUSED, char *key G_GNUC_UNUSED,
-    gpointer data G_GNUC_UNUSED
-)
+void
+mime_type_groups_update(void)
 {
     GVariant *value = g_settings_get_value(SETTINGS, "mime-type-groups");
 
@@ -277,4 +276,22 @@ mime_type_groups_changed_cb(
     }
 
     g_variant_unref(value);
+}
+
+static void
+allowed_mime_types_changed_cb(
+    GObject *object G_GNUC_UNUSED, char *key G_GNUC_UNUSED,
+    gpointer data G_GNUC_UNUSED
+)
+{
+    allowed_mime_types_update();
+}
+
+static void
+mime_type_groups_changed_cb(
+    GObject *object G_GNUC_UNUSED, char *key G_GNUC_UNUSED,
+    gpointer data G_GNUC_UNUSED
+)
+{
+    mime_type_groups_update();
 }

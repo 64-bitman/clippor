@@ -195,8 +195,7 @@ clippor_entry_new(
         const char *cb_label = clippor_clipboard_get_label(parent);
         GChecksum *checksum = g_checksum_new(G_CHECKSUM_SHA1);
 
-        // Feed index, creation time, and parent clipboard label as the hash
-        g_checksum_update(checksum, (guchar *)&index, sizeof(index));
+        // Feed creation time, and parent clipboard label as the hash
         g_checksum_update(
             checksum, (guchar *)&entry->creation_time,
             sizeof(entry->creation_time)
@@ -278,6 +277,9 @@ clippor_entry_get_id(ClipporEntry *self)
     return self->id;
 }
 
+/*
+ * Returns a new reference
+ */
 GBytes *
 clippor_entry_get_data(
     ClipporEntry *self, const char *mime_type, GError **error
@@ -297,10 +299,10 @@ clippor_entry_get_data(
             return NULL;
 
         g_hash_table_insert(self->mime_types, g_strdup(mime_type), data);
-        return data;
+        return g_bytes_ref(data);
     }
 
-    return g_hash_table_lookup(self->mime_types, mime_type);
+    return g_bytes_ref(g_hash_table_lookup(self->mime_types, mime_type));
 }
 
 ClipporClipboard *

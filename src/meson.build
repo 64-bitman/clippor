@@ -1,4 +1,4 @@
-sources += files('clippor-entry.c', 'clippor-clipboard.c', 'clippor-client.c', 'global.c', 'database.c', 'dbus-service.c')
+sources += files('clippor-entry.c', 'clippor-clipboard.c', 'clippor-client.c', 'global.c', 'database.c', 'dbus-service.c', 'util.c')
 includes += include_directories('include')
 
 gnome = import('gnome')

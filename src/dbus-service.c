@@ -1,7 +1,10 @@
 #include "dbus-service.h"
 #include "clippor-clipboard.h"
 #include "com.github.clippor.h"
+#include "database.h"
 #include "global.h"
+#include "util.h"
+#include <gio-unix-2.0/gio/gunixoutputstream.h>
 #include <gio/gio.h>
 
 static void
@@ -46,9 +49,8 @@ dbus_service_init(GError **error)
     g_assert(error == NULL || *error == NULL);
 
     DBUS_SERVICE_IDENTIFIER = g_bus_own_name(
-        G_BUS_TYPE_SESSION, "com.github.clippor",
-        G_BUS_NAME_OWNER_FLAGS_NONE, bus_acquired_cb, name_acquired_cb,
-        name_lost_cb, NULL, NULL
+        G_BUS_TYPE_SESSION, "com.github.clippor", G_BUS_NAME_OWNER_FLAGS_NONE,
+        bus_acquired_cb, name_acquired_cb, name_lost_cb, NULL, NULL
     );
 
     // Run main loop until we acquire name.
@@ -59,14 +61,14 @@ dbus_service_init(GError **error)
 
 static gboolean
 get_entry_info_method_cb(
-    BusClippor *object, GDBusMethodInvocation *invocation, uint64_t index,
+    BusClippor *object, GDBusMethodInvocation *invocation, int64_t index,
     gpointer data
 )
 {
     ClipporClipboard *cb = data;
 
     char *id;
-    uint64_t creation_time, last_used_time;
+    int64_t creation_time, last_used_time;
     uint sz;
     const char **mime_types;
     gboolean starred;
@@ -106,6 +108,114 @@ get_entry_info_method_cb(
 
     g_free(id);
     g_free(mime_types);
+    g_object_unref(entry);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+get_mime_type_data_method_cb(
+    BusClippor *object, GDBusMethodInvocation *invocation, const char *id,
+    const char *mime_type, GVariant *fd_variant, gpointer user_data
+)
+{
+    ClipporClipboard *cb = user_data;
+    int32_t fd_index = g_variant_get_handle(fd_variant);
+    GDBusMessage *message = g_dbus_method_invocation_get_message(invocation);
+    GUnixFDList *fd_list = g_dbus_message_get_unix_fd_list(message);
+
+    if (g_unix_fd_list_get_length(fd_list) == 0)
+        return G_DBUS_METHOD_INVOCATION_UNHANDLED;
+
+    char *err_msg, *err_suffix;
+    GError *error = NULL;
+    int fd = g_unix_fd_list_get(fd_list, fd_index, &error);
+
+    if (fd == -1)
+    {
+        err_msg = "Failed getting file descriptor from list";
+        err_suffix = "FailedGettingFd";
+        goto fail;
+    }
+
+    ClipporEntry *entry = clippor_clipboard_get_entry_by_id(cb, id, &error);
+
+    if (entry == NULL)
+    {
+        err_msg = "Failed getting entry";
+        err_suffix = "FailedGettingEntry";
+        goto fail;
+    }
+
+    GBytes *data = clippor_entry_get_data(entry, mime_type, &error);
+
+    if (data == NULL)
+    {
+        err_msg = "Failed getting entry data for mime type";
+        err_suffix = "FailedGettingMimeTypeData";
+        goto fail;
+    }
+
+    if (!util_send_data(
+            fd, data, g_settings_get_int(SETTINGS, "data-timeout"), &error
+        ))
+    {
+        err_msg = "Failed sending data";
+        err_suffix = "FailedSendingData";
+        goto fail;
+    }
+
+    g_bytes_unref(data);
+    g_object_unref(entry);
+
+    bus_clippor_complete_get_mime_type_data(object, invocation);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+fail:
+    g_assert(error != NULL);
+
+    char *msg = g_strdup_printf("%s: %s", err_msg, error->message);
+    char *err_name = g_strdup_printf(
+        "com.github.clippor.ObjectManager.Error.%s", err_suffix
+    );
+
+    g_error_free(error);
+
+    g_dbus_method_invocation_return_dbus_error(invocation, err_name, msg);
+    g_free(msg);
+    g_free(err_name);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+get_entries_count_method_cb(
+    BusClippor *object, GDBusMethodInvocation *invocation, gpointer user_data
+)
+{
+    ClipporClipboard *cb = user_data;
+
+    GError *error = NULL;
+    int64_t num = database_get_num_entries(cb, &error);
+
+    if (num == -1)
+    {
+        g_assert(error != NULL);
+        char *msg = g_strdup_printf(
+            "Failed getting entry count from database: %s", error->message
+        );
+        g_error_free(error);
+
+        g_dbus_method_invocation_return_dbus_error(
+            invocation,
+            "com.github.clippor.ObjectManager.Error.FailedGettingEntryCount",
+            msg
+        );
+        g_free(msg);
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+    bus_clippor_complete_get_entries_count(object, invocation, num);
 
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
@@ -113,6 +223,7 @@ get_entry_info_method_cb(
 void
 dbus_service_add_clipboard(ClipporClipboard *cb)
 {
+    g_assert(cb != NULL);
     char *path = g_strdup_printf(
         "/com/github/clippor/%s", clippor_clipboard_get_label(cb)
     );
@@ -127,6 +238,14 @@ dbus_service_add_clipboard(ClipporClipboard *cb)
 
     g_signal_connect(
         iface, "handle-get-entry-info", G_CALLBACK(get_entry_info_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-get-mime-type-data",
+        G_CALLBACK(get_mime_type_data_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-get-entries-count",
+        G_CALLBACK(get_entries_count_method_cb), cb
     );
 
     g_dbus_object_manager_server_export(

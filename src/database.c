@@ -396,19 +396,31 @@ database_add_entry(ClipporEntry *entry, GError **error)
  * Derizalize entry at index in database to a ClipporEntry for clipboard. An
  * index of 0 indicates the most recent entry in the database. Note that users
  * may move entries around, so "recent" is not the best way to describe it.
+ * If id is not NULL, then it is used to identify the entry instead of the
+ * index.
  */
 ClipporEntry *
-database_deserialize_entry(ClipporClipboard *cb, uint64_t index, GError **error)
+database_deserialize_entry(
+    ClipporClipboard *cb, int64_t index, const char *id, GError **error
+)
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(cb));
     g_assert(error == NULL || *error == NULL);
 
     // Get row in Main table
-    const char *statement = "SELECT Id, Mime_types, Creation_time,"
-                            "Last_used_time, Starred FROM Main "
-                            "WHERE Clipboard = ?"
-                            "ORDER BY Position DESC "
-                            "LIMIT 1 OFFSET ?";
+    const char *statement;
+
+    if (id == NULL)
+        statement = "SELECT Id, Mime_types, Creation_time,"
+                    "Last_used_time, Starred FROM Main "
+                    "WHERE Clipboard = ?"
+                    "ORDER BY Position DESC "
+                    "LIMIT 1 OFFSET ?";
+    else
+        statement = "SELECT Id, Mime_types, Creation_time,"
+                    "Last_used_time, Starred FROM Main "
+                    "WHERE Clipboard = ? AND Id = ?";
+
     sqlite3_stmt *stmt;
 
     int ret = sqlite3_prepare_v2(db, statement, -1, &stmt, NULL);
@@ -425,7 +437,10 @@ database_deserialize_entry(ClipporClipboard *cb, uint64_t index, GError **error)
     sqlite3_bind_text(
         stmt, 1, clippor_clipboard_get_label(cb), -1, SQLITE_STATIC
     );
-    sqlite3_bind_int64(stmt, 2, index);
+    if (id == NULL)
+        sqlite3_bind_int64(stmt, 2, index);
+    else
+        sqlite3_bind_text(stmt, 2, id, -1, SQLITE_STATIC);
 
     ret = sqlite3_step(stmt);
 
@@ -455,11 +470,19 @@ database_deserialize_entry(ClipporClipboard *cb, uint64_t index, GError **error)
         return entry;
     }
     else if (ret == SQLITE_DONE)
+    {
         // No such row exists
-        g_set_error(
-            error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
-            "No row exists at index %" PRIu64, index
-        );
+        if (id == NULL)
+            g_set_error(
+                    error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
+                    "No row exists at index %" PRIu64, index
+                    );
+        else
+            g_set_error(
+                    error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
+                    "No row exists at with id '%s'", id
+                    );
+    }
     else
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
@@ -544,7 +567,7 @@ database_deserialize_mime_type(
 /*
  * Get number of entries for clipboard in database. Returns -1 on error
  */
-int
+int64_t
 database_get_num_entries(ClipporClipboard *cb, GError **error)
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(cb));

@@ -35,9 +35,13 @@ void clippor_clipboard_add_client(
 );
 
 ClipporEntry *clippor_clipboard_get_entry(
-    ClipporClipboard *self, uint64_t index, GError **error
+    ClipporClipboard *self, int64_t index, GError **error
+);
+
+ClipporEntry *clippor_clipboard_get_entry_by_id(
+    ClipporClipboard *self, const char *id, GError **error
 );
 
 const char *clippor_clipboard_get_label(ClipporClipboard *self);
 
-uint64_t clippor_clipboard_get_max_entries(ClipporClipboard *self);
+int64_t clippor_clipboard_get_max_entries(ClipporClipboard *self);
