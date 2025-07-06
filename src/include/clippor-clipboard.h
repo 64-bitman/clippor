@@ -44,4 +44,5 @@ ClipporEntry *clippor_clipboard_get_entry_by_id(
 
 const char *clippor_clipboard_get_label(ClipporClipboard *self);
 
+int64_t clippor_clipboard_get_max_entries_memory(ClipporClipboard *self);
 int64_t clippor_clipboard_get_max_entries(ClipporClipboard *self);

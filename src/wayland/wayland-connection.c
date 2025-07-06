@@ -2,7 +2,6 @@
 #include "clippor-clipboard.h"
 #include "ext-data-control-v1.h"
 #include "glib.h"
-#include "global.h"
 #include "virtual-keyboard-unstable-v1.h"
 #include "wayland-seat.h"
 #include "wlr-data-control-unstable-v1.h"
@@ -64,8 +63,6 @@ struct _WaylandConnection
 {
     GObject parent;
 
-    uint timeout; // In milliseconds
-
     GSource *source;
     struct
     {
@@ -88,6 +85,10 @@ struct _WaylandConnection
         struct zwp_virtual_keyboard_manager_v1 *zwp_virtual_keyboard_manager_v1;
     } gobjects;
 
+    // In milliseconds
+    int data_timeout;
+    int connection_timeout;
+
     gboolean active;
 };
 
@@ -96,7 +97,8 @@ G_DEFINE_TYPE(WaylandConnection, wayland_connection, G_TYPE_OBJECT)
 typedef enum
 {
     PROP_DISPLAY = 1, // An empty string is equivalent to passing NULL
-    PROP_TIMEOUT,
+    PROP_DATA_TIMEOUT,
+    PROP_CONNECTION_TIMEOUT,
     N_PROPERTIES
 } WaylandConnectionProperty;
 
@@ -133,14 +135,17 @@ wayland_connection_set_property(
     {
         const char *display = g_value_get_string(value);
 
-        if (display == NULL || g_strcmp0(display, "") == 0)
+        if (display == NULL)
             display = g_getenv("WAYLAND_DISPLAY");
 
         self->display.name = g_strdup(display);
         break;
     }
-    case PROP_TIMEOUT:
-        self->timeout = g_value_get_uint(value);
+    case PROP_DATA_TIMEOUT:
+        self->data_timeout = g_value_get_int(value);
+        break;
+    case PROP_CONNECTION_TIMEOUT:
+        self->connection_timeout = g_value_get_int(value);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -162,8 +167,11 @@ wayland_connection_get_property(
     case PROP_DISPLAY:
         g_value_set_string(value, self->display.name);
         break;
-    case PROP_TIMEOUT:
-        g_value_set_uint(value, self->timeout);
+    case PROP_DATA_TIMEOUT:
+        g_value_set_int(value, self->data_timeout);
+        break;
+    case PROP_CONNECTION_TIMEOUT:
+        g_value_set_int(value, self->connection_timeout);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -212,10 +220,15 @@ wayland_connection_class_init(WaylandConnectionClass *class)
         "display", "Display name", "Name of connected Wayland display", "",
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
-    obj_properties[PROP_TIMEOUT] = g_param_spec_uint(
-        "timeout", "Timeout",
-        "Timeout to determine if Wayland connection is unresponsive", 0,
-        G_MAXUINT, 500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
+    obj_properties[PROP_DATA_TIMEOUT] = g_param_spec_int(
+        "data-timeout", "Data timeout",
+        "Timeout to use when transferring data", -1,
+        G_MAXINT, 500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
+    );
+    obj_properties[PROP_CONNECTION_TIMEOUT] = g_param_spec_int(
+        "connection-timeout", "Connection timeout",
+        "Timeout to determine if Wayland connection is unresponsive", -1,
+        G_MAXINT, 500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
 
     g_object_class_install_properties(
@@ -234,12 +247,12 @@ wayland_connection_init(WaylandConnection *self)
 }
 
 /*
- * If display is NULL or an empty string, $WAYLAND_DISPLAY will be used
+ * If display is NULL $WAYLAND_DISPLAY will be used
  */
 WaylandConnection *
 wayland_connection_new(const char *display_name, GError **error)
 {
-    g_return_val_if_fail(error == NULL || *error == NULL, NULL);
+    g_assert(error == NULL || *error == NULL);
 
     WaylandConnection *ct =
         g_object_new(WAYLAND_TYPE_CONNECTION, "display", display_name, NULL);
@@ -256,13 +269,6 @@ wayland_connection_new(const char *display_name, GError **error)
 
         return NULL;
     }
-
-    // Bind timeout to gsettings. It may be NULL when during tests
-    if (SETTINGS != NULL)
-        g_settings_bind(
-            SETTINGS, "connection-timeout", ct, "timeout",
-            G_SETTINGS_BIND_DEFAULT
-        );
 
     return ct;
 }
@@ -419,24 +425,24 @@ wl_registry_listener_global_remove(
 int
 wayland_connection_get_fd(WaylandConnection *self)
 {
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), -1);
+    g_assert(WAYLAND_IS_CONNECTION(self));
 
     return wl_display_get_fd(self->display.proxy);
 }
 
 /*
  * Returns NULL if no seats exist. Does not create a new reference of seat. If
- * name is NULL or empty, then the first seat found is used.
+ * name is NULL, then the first seat found is used.
  *
  */
 WaylandSeat *
 wayland_connection_get_seat(WaylandConnection *self, const char *name)
 {
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
+    g_assert(WAYLAND_IS_CONNECTION(self));
 
     WaylandSeat *seat = NULL;
 
-    if (name == NULL || g_strcmp0(name, "") == 0)
+    if (name == NULL)
     {
         GHashTableIter iter;
 
@@ -455,7 +461,7 @@ wayland_connection_get_seat(WaylandConnection *self, const char *name)
 GHashTable *
 wayland_connection_get_seats(WaylandConnection *self)
 {
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
+    g_assert(WAYLAND_IS_CONNECTION(self));
 
     return self->gobjects.seats;
 }
@@ -463,7 +469,7 @@ wayland_connection_get_seats(WaylandConnection *self)
 char *
 wayland_connection_get_display_name(WaylandConnection *self)
 {
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
+    g_assert(WAYLAND_IS_CONNECTION(self));
 
     return self->display.name;
 }
@@ -471,7 +477,7 @@ wayland_connection_get_display_name(WaylandConnection *self)
 struct wl_display *
 wayland_connection_get_display(WaylandConnection *self)
 {
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
+    g_assert(WAYLAND_IS_CONNECTION(self));
 
     return self->display.proxy;
 }
@@ -479,8 +485,8 @@ wayland_connection_get_display(WaylandConnection *self)
 gboolean
 wayland_connection_flush(WaylandConnection *self, GError **error)
 {
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-    g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+    g_assert(WAYLAND_IS_CONNECTION(self));
+    g_assert(error == NULL || *error == NULL);
 
     int ret;
     GPollFD pfd = {.fd = wayland_connection_get_fd(self), .events = G_IO_OUT};
@@ -497,7 +503,7 @@ wayland_connection_flush(WaylandConnection *self, GError **error)
 
         if (errno == EAGAIN)
         {
-            ret = g_poll(&pfd, 1, self->timeout);
+            ret = g_poll(&pfd, 1, self->connection_timeout);
 
             if (ret == 0)
                 g_set_error(
@@ -531,8 +537,8 @@ wayland_connection_flush(WaylandConnection *self, GError **error)
 int
 wayland_connection_dispatch(WaylandConnection *self, GError **error)
 {
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-    g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+    g_assert(WAYLAND_IS_CONNECTION(self));
+    g_assert(error == NULL || *error == NULL);
     int num, ret = 0;
 
     while (wl_display_prepare_read(self->display.proxy) == -1)
@@ -560,7 +566,7 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
     GPollFD fds = {.fd = wayland_connection_get_fd(self), .events = G_IO_IN};
 
     // Poll until there is data to read from the display fd.
-    ret = g_poll(&fds, 1, self->timeout);
+    ret = g_poll(&fds, 1, self->connection_timeout);
 
     if (ret <= 0)
     {
@@ -637,8 +643,8 @@ static struct wl_callback_listener vwl_callback_listener = {
 gboolean
 wayland_connection_roundtrip(WaylandConnection *self, GError **error)
 {
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), FALSE);
-    g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+    g_assert(WAYLAND_IS_CONNECTION(self));
+    g_assert(error == NULL || *error == NULL);
 
     struct wl_callback *callback;
 
@@ -679,7 +685,7 @@ wayland_connection_roundtrip(WaylandConnection *self, GError **error)
 
         now = g_get_monotonic_time();
 
-        if (now - start >= self->timeout * 1000)
+        if (now - start >= self->connection_timeout * 1000)
         {
             num = -1;
             g_set_error(
@@ -840,8 +846,8 @@ wayland_connection_install_source(
     WaylandConnection *self, GMainContext *context
 )
 {
-    g_return_if_fail(WAYLAND_IS_CONNECTION(self));
-    g_return_if_fail(self->source == NULL);
+    g_assert(WAYLAND_IS_CONNECTION(self));
+    g_assert(self->source == NULL);
 
     GSource *source = g_source_new(
         &wayland_connection_source_funcs, sizeof(WaylandConnectionSource)
@@ -877,7 +883,7 @@ wayland_connection_install_source(
 void
 wayland_connection_uninstall_source(WaylandConnection *self)
 {
-    g_return_if_fail(WAYLAND_IS_CONNECTION(self));
+    g_assert(WAYLAND_IS_CONNECTION(self));
 
     if (self->source == NULL)
         return;
@@ -898,7 +904,7 @@ wayland_connection_uninstall_source(WaylandConnection *self)
 WaylandDataDeviceManager *
 wayland_connection_get_data_device_manager(WaylandConnection *self)
 {
-    g_return_val_if_fail(WAYLAND_IS_CONNECTION(self), NULL);
+    g_assert(WAYLAND_IS_CONNECTION(self));
 
     WaylandDataDeviceManager *manager = g_new(WaylandDataDeviceManager, 1);
 
@@ -951,7 +957,7 @@ wayland_data_device_manager_get_data_device(
     WaylandDataDeviceManager *manager, WaylandSeat *seat
 )
 {
-    g_return_val_if_fail(wayland_data_device_manager_is_valid(manager), NULL);
+    g_assert(wayland_data_device_manager_is_valid(manager));
 
     WaylandDataDevice *device = g_new0(WaylandDataDevice, 1);
 
@@ -983,7 +989,7 @@ wayland_data_device_manager_create_data_source(
     WaylandDataDeviceManager *manager
 )
 {
-    g_return_val_if_fail(wayland_data_device_manager_is_valid(manager), NULL);
+    g_assert(wayland_data_device_manager_is_valid(manager));
 
     WaylandDataSource *source = g_new0(WaylandDataSource, 1);
 
@@ -1032,7 +1038,7 @@ static GHashTable *pending_offers = NULL;
     {                                                                          \
         if (type == NULL)                                                      \
             return;                                                            \
-        g_return_if_fail(wayland_data_##type##_is_valid(type));                \
+        g_assert(wayland_data_##type##_is_valid(type));                        \
         switch (type->protocol)                                                \
         {                                                                      \
         case WAYLAND_DATA_PROTOCOL_EXT:                                        \
@@ -1056,7 +1062,7 @@ wayland_data_offer_destroy(WaylandDataOffer *offer)
 {
     if (offer == NULL)
         return;
-    g_return_if_fail(wayland_data_offer_is_valid(offer));
+    g_assert(wayland_data_offer_is_valid(offer));
 
     switch (offer->protocol)
     {
@@ -1082,9 +1088,9 @@ wayland_data_device_set_seletion(
     ClipporSelectionType selection
 )
 {
-    g_return_if_fail(wayland_data_device_is_valid(device));
-    g_return_if_fail(source == NULL || wayland_data_source_is_valid(source));
-    g_return_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE);
+    g_assert(wayland_data_device_is_valid(device));
+    g_assert(source == NULL || wayland_data_source_is_valid(source));
+    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
 
     void *proxy = source == NULL ? NULL : source->proxy;
 
@@ -1125,8 +1131,8 @@ wayland_data_device_set_seletion(
 void
 wayland_data_source_offer(WaylandDataSource *source, const char *mime_type)
 {
-    g_return_if_fail(wayland_data_source_is_valid(source));
-    g_return_if_fail(mime_type != NULL);
+    g_assert(wayland_data_source_is_valid(source));
+    g_assert(mime_type != NULL);
 
     switch (source->protocol)
     {
@@ -1146,9 +1152,9 @@ wayland_data_offer_receive(
     WaylandDataOffer *offer, const char *mime_type, int32_t fd
 )
 {
-    g_return_if_fail(wayland_data_offer_is_valid(offer));
-    g_return_if_fail(mime_type != NULL);
-    g_return_if_fail(fd >= 0);
+    g_assert(wayland_data_offer_is_valid(offer));
+    g_assert(mime_type != NULL);
+    g_assert(fd >= 0);
 
     switch (offer->protocol)
     {
@@ -1363,10 +1369,10 @@ static struct zwlr_data_control_offer_v1_listener
         structure *type, structure##Listener *listener, void *data             \
     )                                                                          \
     {                                                                          \
-        g_return_if_fail(wayland_data_##type##_is_valid(type));                \
-        g_return_if_fail(listener != NULL);                                    \
-        g_return_if_fail(type->data == NULL);                                  \
-        g_return_if_fail(type->listener == NULL);                              \
+        g_assert(wayland_data_##type##_is_valid(type));                        \
+        g_assert(listener != NULL);                                            \
+        g_assert(type->data == NULL);                                          \
+        g_assert(type->listener == NULL);                                      \
         type->data = data;                                                     \
         type->listener = listener;                                             \
         switch (type->protocol)                                                \

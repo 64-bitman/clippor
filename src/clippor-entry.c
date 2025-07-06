@@ -246,6 +246,15 @@ clippor_entry_add_mime_type(
 }
 
 gboolean
+clippor_entry_has_mime_type(ClipporEntry *self, const char *mime_type)
+{
+    g_assert(CLIPPOR_IS_ENTRY(self));
+    g_assert(mime_type != NULL);
+
+    return g_hash_table_contains(self->mime_types, mime_type);
+}
+
+gboolean
 clippor_entry_is_starred(ClipporEntry *self)
 {
     g_assert(CLIPPOR_IS_ENTRY(self));

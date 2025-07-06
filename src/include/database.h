@@ -18,6 +18,7 @@ typedef enum
 GQuark database_error_quark(void);
 
 gboolean database_init(GError **error);
+void database_uninit(void);
 
 gboolean database_add_entry(ClipporEntry *entry, GError **error);
 
@@ -31,3 +32,5 @@ GBytes *database_deserialize_mime_type(
 
 int64_t database_get_num_entries(ClipporClipboard *cb, GError **error);
 int64_t database_get_entry_index(ClipporEntry *entry, GError **error);
+
+gboolean database_trim_entries(ClipporClipboard *cb, GError **error);

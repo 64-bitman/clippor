@@ -38,7 +38,13 @@ sqlite_dep = dependency('sqlite3')
 wl_dep = dependency('wayland-client', required: get_option('wayland'))
 x11_dep = dependency('xcb', required: get_option('x11'))
 
-deps += [glib_dep, gio_dep, gio_unix_dep, wl_dep, x11_dep, sqlite_dep]
+deps += [
+  glib_dep,
+  gio_dep,
+  gio_unix_dep,wl_dep,
+  x11_dep,
+  sqlite_dep,
+  ]
 
 cc = meson.get_compiler('c')
 cfg_data = configuration_data()
@@ -55,7 +61,6 @@ configure_file(output: 'project_config.h', configuration: cfg_data)
 includes += include_directories('.')
 
 subdir('tests')
-subdir('schemas')
 subdir('src')
 
 sources += 'src/main.c'

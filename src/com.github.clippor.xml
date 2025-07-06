@@ -16,7 +16,7 @@
             <arg name='fd' type='h' direction='in'/>
         </method>
         <method name='GetEntriesCount'>
-            <arg name='count' type='t' direction='out'/>
+            <arg name='count' type='x' direction='out'/>
         </method>
     </interface>
 </node>

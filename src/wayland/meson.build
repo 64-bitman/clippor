@@ -3,5 +3,4 @@ if wl_dep.found()
   includes += include_directories('include')
 
   subdir('protocols')
-  subdir('tests')
 endif

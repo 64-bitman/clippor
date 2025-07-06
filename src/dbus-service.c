@@ -2,10 +2,16 @@
 #include "clippor-clipboard.h"
 #include "com.github.clippor.h"
 #include "database.h"
-#include "global.h"
+#include "server.h"
 #include "util.h"
 #include <gio-unix-2.0/gio/gunixoutputstream.h>
 #include <gio/gio.h>
+
+static GDBusConnection *DBUS_SERVICE_CONNECTION;
+static uint DBUS_SERVICE_IDENTIFIER;
+static GDBusObjectManagerServer *DBUS_SERVICE_OBJ_MANAGER;
+
+static int TIMEOUT;
 
 static void
 bus_acquired_cb(
@@ -24,7 +30,7 @@ name_acquired_cb(
     gpointer data G_GNUC_UNUSED
 )
 {
-    g_main_loop_quit(MAIN_LOOP);
+    g_main_loop_quit(server_get_main_loop());
 }
 
 static void
@@ -40,11 +46,11 @@ name_lost_cb(
         // Name cannot be obtained
         g_message("Failed obtaining name on session bus");
 
-    g_main_loop_quit(MAIN_LOOP);
+    g_main_loop_quit(server_get_main_loop());
 }
 
 gboolean
-dbus_service_init(GError **error)
+dbus_service_init(GError **error, int timeout)
 {
     g_assert(error == NULL || *error == NULL);
 
@@ -53,10 +59,19 @@ dbus_service_init(GError **error)
         bus_acquired_cb, name_acquired_cb, name_lost_cb, NULL, NULL
     );
 
+    TIMEOUT = timeout;
+
     // Run main loop until we acquire name.
-    g_main_loop_run(MAIN_LOOP);
+    g_main_loop_run(server_get_main_loop());
 
     return TRUE;
+}
+
+void
+dbus_server_uninit(void)
+{
+    g_object_unref(DBUS_SERVICE_OBJ_MANAGER);
+    g_bus_unown_name(DBUS_SERVICE_IDENTIFIER);
 }
 
 static gboolean
@@ -100,7 +115,6 @@ get_entry_info_method_cb(
         clippor_entry_get_mime_types(entry), &sz
     );
 
-    // TODO: allow for multiple clippor instances
     bus_clippor_complete_get_entry_info(
         object, invocation, id, creation_time, last_used_time, starred,
         mime_types
@@ -125,7 +139,13 @@ get_mime_type_data_method_cb(
     GUnixFDList *fd_list = g_dbus_message_get_unix_fd_list(message);
 
     if (g_unix_fd_list_get_length(fd_list) == 0)
-        return G_DBUS_METHOD_INVOCATION_UNHANDLED;
+    {
+        g_dbus_method_invocation_return_dbus_error(
+            invocation, "com.github.clippor.ObjectManager.Error.EmptyFDList",
+            "FD list is empty"
+        );
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
 
     char *err_msg, *err_suffix;
     GError *error = NULL;
@@ -156,9 +176,7 @@ get_mime_type_data_method_cb(
         goto fail;
     }
 
-    if (!util_send_data(
-            fd, data, g_settings_get_int(SETTINGS, "data-timeout"), &error
-        ))
+    if (!util_send_data(fd, data, TIMEOUT, &error))
     {
         err_msg = "Failed sending data";
         err_suffix = "FailedSendingData";

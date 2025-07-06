@@ -81,7 +81,7 @@ tester_client_get_data(
     ClipporSelectionType selection, GError **error G_GNUC_UNUSED
 )
 {
-    g_return_val_if_fail(TESTER_IS_CLIENT(self), NULL);
+    g_assert(TESTER_IS_CLIENT(self));
 
     TesterClient *client = TESTER_CLIENT(self);
 
@@ -98,7 +98,7 @@ tester_client_get_mime_types(
     ClipporClient *self, ClipporSelectionType selection
 )
 {
-    g_return_val_if_fail(TESTER_IS_CLIENT(self), NULL);
+    g_assert(TESTER_IS_CLIENT(self));
 
     TesterClient *client = TESTER_CLIENT(self);
 
@@ -116,7 +116,7 @@ tester_client_set_entry(
     GError **error G_GNUC_UNUSED
 )
 {
-    g_return_val_if_fail(TESTER_IS_CLIENT(self), FALSE);
+    g_assert(TESTER_IS_CLIENT(self));
 
     TesterClient *client = TESTER_CLIENT(self);
 
@@ -130,7 +130,7 @@ tester_client_set_entry(
 TesterClientSelection *
 tester_client_get_selection(TesterClient *self, ClipporSelectionType selection)
 {
-    g_return_val_if_fail(TESTER_IS_CLIENT(self), NULL);
+    g_assert(TESTER_IS_CLIENT(self));
 
     if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
         return &self->regular;

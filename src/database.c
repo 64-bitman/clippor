@@ -1,6 +1,6 @@
 #include "database.h"
 #include "clippor-entry.h"
-#include "global.h"
+#include "util.h"
 #include <gio/gio.h>
 #include <glib-unix.h>
 #include <glib.h>
@@ -10,45 +10,7 @@
 G_DEFINE_QUARK(database_error_quark, database_error)
 
 static sqlite3 *db = NULL;
-const char *store_dir = NULL;
-
-/*
- * Remember to free returned value
- */
-static char *
-get_database_directory(void)
-{
-    // Try using $XDG_DATA_HOME first
-    const char *xdgdatahome = g_getenv("XDG_DATA_HOME");
-    char *path;
-
-    if (xdgdatahome != NULL)
-    {
-        path = g_strdup_printf("%s/clippor", xdgdatahome);
-
-        if (g_mkdir_with_parents(path, 0755) == 0)
-            return path;
-
-        g_free(path);
-    }
-
-    // Try ~/.local/share/clippor
-    path = g_strdup_printf("%s/.local/share/clippor", g_getenv("HOME"));
-
-    if (g_mkdir_with_parents(path, 0755) == 0)
-        return path;
-
-    g_free(path);
-
-    // Finally try ~/.clippor
-    path = g_strdup_printf("%s/.clippor", g_get_home_dir());
-
-    if (g_mkdir_with_parents(path, 0755) == 0)
-        return path;
-
-    g_free(path);
-    return NULL;
-}
+static char *store_dir = NULL;
 
 /*
  * Check if the database is outdated and update it. Create the version table if
@@ -126,14 +88,16 @@ database_init(GError **error)
 {
     g_assert(error == NULL || *error == NULL);
 
-    store_dir = get_database_directory();
+    const char *data_dir = g_get_user_data_dir();
+    store_dir = g_strdup_printf("%s/clippor", data_dir);
 
-    if (store_dir == NULL)
+    if (g_mkdir_with_parents(store_dir, 0755) == -1)
     {
-        g_set_error_literal(
+        g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_NO_DATA_DIR,
-            "Cannot find a suitable directory for the database"
+            "Failed creating database directory: %s", g_strerror(errno)
         );
+        g_free(store_dir);
         return FALSE;
     }
 
@@ -193,6 +157,13 @@ database_init(GError **error)
     }
 
     return TRUE;
+}
+
+void
+database_uninit(void)
+{
+    g_free(store_dir);
+    sqlite3_close(db);
 }
 
 /*
@@ -474,14 +445,14 @@ database_deserialize_entry(
         // No such row exists
         if (id == NULL)
             g_set_error(
-                    error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
-                    "No row exists at index %" PRIu64, index
-                    );
+                error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
+                "No row exists at index %" PRIu64, index
+            );
         else
             g_set_error(
-                    error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
-                    "No row exists at with id '%s'", id
-                    );
+                error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
+                "No row exists at with id '%s'", id
+            );
     }
     else
         g_set_error(
@@ -665,4 +636,19 @@ database_get_entry_index(ClipporEntry *entry, GError **error)
 
     sqlite3_finalize(stmt);
     return -1;
+}
+
+/*
+ * Trim entries and their data from database according to max-entries for
+ * clipboard
+ */
+gboolean
+database_trim_entries(ClipporClipboard *cb, GError **error)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(cb));
+    g_assert(error == NULL || *error == NULL);
+
+    // TODO: implement code!!
+
+    return TRUE;
 }

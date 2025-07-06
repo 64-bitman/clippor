@@ -34,6 +34,7 @@ clippor_client_init(ClipporClient *self G_GNUC_UNUSED)
 
 /*
  * Return mime types for the current selection or NULL if there is no selection.
+ * Should return a new reference to ptr array.
  */
 GPtrArray *
 clippor_client_get_mime_types(
@@ -45,9 +46,12 @@ clippor_client_get_mime_types(
 
     ClipporClientClass *class = CLIPPOR_CLIENT_GET_CLASS(self);
 
-    return class->get_mime_types == NULL
-               ? NULL
-               : class->get_mime_types(self, selection);
+    if (class->get_mime_types == NULL)
+        return NULL;
+
+    GPtrArray *mime_types = class->get_mime_types(self, selection);
+
+    return mime_types == NULL ? NULL : g_ptr_array_ref(mime_types);
 }
 
 /*
@@ -60,10 +64,10 @@ clippor_client_get_data(
     GError **error
 )
 {
-    g_return_val_if_fail(CLIPPOR_IS_CLIENT(self), NULL);
-    g_return_val_if_fail(mime_type != NULL, NULL);
-    g_return_val_if_fail(selection != CLIPPOR_SELECTION_TYPE_NONE, NULL);
-    g_return_val_if_fail(error == NULL || *error == NULL, NULL);
+    g_assert(CLIPPOR_IS_CLIENT(self));
+    g_assert(mime_type != NULL);
+    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
+    g_assert(error == NULL || *error == NULL);
 
     ClipporClientClass *class = CLIPPOR_CLIENT_GET_CLASS(self);
 
@@ -89,6 +93,13 @@ clippor_client_set_entry(
 
     //  Don't want to immediately steal the selection when there is a new one.
     if (clippor_entry_is_from(entry) == G_OBJECT(self))
+        return TRUE;
+
+    GHashTableIter iter;
+
+    g_hash_table_iter_init(&iter, clippor_entry_get_mime_types(entry));
+    // No point in setting selection if there are no mime types in entry
+    if (!g_hash_table_iter_next(&iter, NULL, NULL))
         return TRUE;
 
     return class->set_entry == NULL

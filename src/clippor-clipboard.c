@@ -3,7 +3,6 @@
 #include "clippor-entry.h"
 #include "database.h"
 #include "dbus-service.h"
-#include "global.h"
 #include <glib-object.h>
 #include <inttypes.h>
 #include <stdint.h>
@@ -26,7 +25,11 @@ struct _ClipporClipboard
     GHashTable *clients;
 
     int64_t max_entries;
+    int64_t max_entries_memory;
     GQueue *entries; // Most recent being at the head of the queue
+
+    GPtrArray *allowed_mime_types;
+    GHashTable *mime_type_groups;
 };
 
 G_DEFINE_TYPE(ClipporClipboard, clippor_clipboard, G_TYPE_OBJECT)
@@ -34,8 +37,10 @@ G_DEFINE_TYPE(ClipporClipboard, clippor_clipboard, G_TYPE_OBJECT)
 typedef enum
 {
     PROP_LABEL = 1,
-    PROP_CLIENTS,
     PROP_MAX_ENTRIES,
+    PROP_MAX_ENTRIES_MEMORY,
+    PROP_ALLOWED_MIME_TYPES,
+    PROP_MIME_TYPE_GROUPS,
     N_PROPERTIES
 } ClipporClipboardProperty;
 
@@ -59,6 +64,19 @@ clippor_clipboard_set_property(
     case PROP_MAX_ENTRIES:
         self->max_entries = g_value_get_int64(value);
         break;
+    case PROP_MAX_ENTRIES_MEMORY:
+        self->max_entries_memory = g_value_get_int64(value);
+        break;
+    case PROP_ALLOWED_MIME_TYPES:
+        if (self->allowed_mime_types != NULL)
+            g_ptr_array_unref(self->allowed_mime_types);
+        self->allowed_mime_types = g_value_dup_boxed(value);
+        break;
+    case PROP_MIME_TYPE_GROUPS:
+        if (self->mime_type_groups != NULL)
+            g_hash_table_unref(self->mime_type_groups);
+        self->mime_type_groups = g_value_dup_boxed(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
         break;
@@ -80,8 +98,14 @@ clippor_clipboard_get_property(
     case PROP_MAX_ENTRIES:
         g_value_set_int64(value, self->max_entries);
         break;
-    case PROP_CLIENTS:
-        g_value_set_boxed(value, self->clients);
+    case PROP_MAX_ENTRIES_MEMORY:
+        g_value_set_int64(value, self->max_entries_memory);
+        break;
+    case PROP_ALLOWED_MIME_TYPES:
+        g_value_set_boxed(value, self->allowed_mime_types);
+        break;
+    case PROP_MIME_TYPE_GROUPS:
+        g_value_set_boxed(value, self->mime_type_groups);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -107,6 +131,9 @@ clippor_clipboard_finalize(GObject *object)
 
     g_free(self->label);
 
+    g_ptr_array_unref(self->allowed_mime_types);
+    g_hash_table_unref(self->mime_type_groups);
+
     g_hash_table_unref(self->clients);
     g_queue_free(self->entries);
 
@@ -128,14 +155,24 @@ clippor_clipboard_class_init(ClipporClipboardClass *class)
         "label", "Label", "Label of clipboard", "Untitled Clipboard",
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
-    obj_properties[PROP_CLIENTS] = g_param_spec_boxed(
-        "selections", "Selections", "Selections attached to this clipboard",
-        G_TYPE_HASH_TABLE, G_PARAM_READABLE
-    );
     obj_properties[PROP_MAX_ENTRIES] = g_param_spec_int64(
         "max-entries", "Max entries",
-        "Maximum amount of entries stored in memory", 1, G_MAXINT64, 10,
+        "Maximum amount of entries stored persistently", 0, G_MAXINT64, 100,
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT
+    );
+    obj_properties[PROP_MAX_ENTRIES_MEMORY] = g_param_spec_int64(
+        "max-entries-memory", "Max entries in memory",
+        "Maximum amount of entries stored in memory", 0, G_MAXINT64, 10,
+        G_PARAM_READWRITE | G_PARAM_CONSTRUCT
+    );
+    obj_properties[PROP_ALLOWED_MIME_TYPES] = g_param_spec_boxed(
+        "allowed-mime-types", "Allowed mime types",
+        "Allowed mime types to store", G_TYPE_PTR_ARRAY, G_PARAM_READWRITE
+    );
+    obj_properties[PROP_MIME_TYPE_GROUPS] = g_param_spec_boxed(
+        "mime-type-groups", "Mime type groups",
+        "Mime types to expand from a single mime type", G_TYPE_HASH_TABLE,
+        G_PARAM_READWRITE
     );
 
     g_object_class_install_properties(
@@ -150,6 +187,13 @@ clippor_clipboard_init(ClipporClipboard *self)
         g_direct_hash, g_direct_equal, g_free, callback_client_unref
     );
     self->entries = g_queue_new();
+
+    self->allowed_mime_types =
+        g_ptr_array_new_with_free_func((void (*)(void *))g_regex_unref);
+    self->mime_type_groups = g_hash_table_new_full(
+        g_direct_hash, g_direct_equal, (void (*)(void *))g_regex_unref,
+        (void (*)(void *))g_ptr_array_unref
+    );
 }
 
 ClipporClipboard *
@@ -210,14 +254,21 @@ clippor_clipboard_add_entry(
     g_assert(CLIPPOR_IS_ENTRY(entry));
     g_assert(error == NULL || *error == NULL);
 
-    // Shove out excess old entries until there is one spot available
-    while (self->entries->length >= self->max_entries)
-        g_object_unref(g_queue_pop_tail(self->entries));
+    if (!database_trim_entries(self, error))
+        return FALSE;
+
+    if (!database_add_entry(entry, error))
+        return FALSE;
+
+    // If max_entries_memory is 0 then have indefinite number of entries.
+    if (self->max_entries_memory > 0)
+        // Shove out excess old entries until there is one spot available
+        while (self->entries->length >= self->max_entries_memory)
+            g_object_unref(g_queue_pop_tail(self->entries));
 
     g_queue_push_head(self->entries, entry);
 
-    // Add to database
-    return database_add_entry(entry, error);
+    return TRUE;
 }
 
 /*
@@ -237,25 +288,31 @@ callback_client_selection(
     // Get mime types & data and add them to the entry
     GPtrArray *mime_types = clippor_client_get_mime_types(client, selection);
     GError *error = NULL;
+    gboolean did_something = FALSE; // If we added a mime type to the entry
 
     // Abort on any error
     for (uint i = 0; i < mime_types->len; i++)
     {
         const char *mime_type = mime_types->pdata[i];
 
-        // Will be NULL during unit tests
-        if (ALLOWED_MIME_TYPES == NULL)
+        // Check if we already added mime type in case of duplicates
+        if (clippor_entry_has_mime_type(entry, mime_type))
+            continue;
+
+        // If no mime types provided then accept all mime types
+        if (cb->allowed_mime_types == NULL || cb->allowed_mime_types->len == 0)
             goto allowed;
 
         // Check if mime type is allowed
-        for (uint k = 0; k < ALLOWED_MIME_TYPES->len; k++)
+        for (uint k = 0; k < cb->allowed_mime_types->len; k++)
         {
-            GRegex *regex = ALLOWED_MIME_TYPES->pdata[k];
+            GRegex *regex = cb->allowed_mime_types->pdata[k];
 
             if (g_regex_match(regex, mime_type, G_REGEX_MATCH_DEFAULT, NULL))
                 goto allowed;
         }
         continue;
+
 allowed:;
         GBytes *data =
             clippor_client_get_data(client, mime_type, selection, &error);
@@ -275,15 +332,17 @@ allowed:;
             return;
         }
 
-        if (MIME_TYPE_GROUPS == NULL)
+        // If there are no mime type groups defined then do nothing
+        if (cb->mime_type_groups == NULL)
             goto skip;
+
         // Check if mime type has a group. If so then also add the other mime
         // types in the group with the same GBytes object.
         GHashTableIter iter;
         GRegex *regex;
         GPtrArray *group_mimes;
 
-        g_hash_table_iter_init(&iter, MIME_TYPE_GROUPS);
+        g_hash_table_iter_init(&iter, cb->mime_type_groups);
 
         while (g_hash_table_iter_next(
             &iter, (gpointer *)&regex, (gpointer *)&group_mimes
@@ -297,18 +356,28 @@ allowed:;
                     );
             }
 skip:
+        did_something = TRUE;
         clippor_entry_add_mime_type(entry, mime_type, data);
         g_bytes_unref(data);
     }
 
     g_ptr_array_unref(mime_types);
 
+    if (!did_something)
+    {
+        // No mime types exported, do nothing.
+        g_object_unref(entry);
+        return;
+    }
+
     if (!clippor_clipboard_add_entry(cb, entry, &error))
     {
+        g_assert(error != NULL);
         g_message(
             "Failed adding entry for clipboard '%s': %s", cb->label,
             error->message
         );
+        g_object_unref(entry);
         g_error_free(error);
         return;
     }
@@ -354,7 +423,10 @@ clippor_clipboard_add_client(
     // through the haash table on a new selection.
     g_weak_ref_init(ref, client);
 
-    g_hash_table_insert(self->clients, g_strdup(label), ref);
+    // Only add if client doesn't already exist in table, if it does then just
+    // connect the signal for it.
+    if (!g_hash_table_contains(self->clients, label))
+        g_hash_table_insert(self->clients, g_strdup(label), ref);
 
     // Update client selection
 
@@ -391,8 +463,9 @@ clippor_clipboard_get_entry(
 
     ClipporEntry *entry;
 
-    // If index is outside the in memory list, search the database
-    if (index > self->max_entries)
+    // If index is outside the in memory list, search the database. Unless
+    // max_entries is 0 then all entries are stored in memory.
+    if (self->max_entries_memory > 0 && index > self->max_entries_memory)
         entry = database_deserialize_entry(self, index, NULL, error);
     else
     {
@@ -436,6 +509,14 @@ clippor_clipboard_get_label(ClipporClipboard *self)
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
 
     return self->label;
+}
+
+int64_t
+clippor_clipboard_get_max_entries_memory(ClipporClipboard *self)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+
+    return self->max_entries_memory;
 }
 
 int64_t

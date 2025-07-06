@@ -82,7 +82,6 @@ void wayland_connection_uninstall_source(WaylandConnection *self);
 WaylandDataDeviceManager *
 wayland_connection_get_data_device_manager(WaylandConnection *self);
 
-// ----- Validation -----
 gboolean wayland_data_device_manager_is_valid(
     WaylandDataDeviceManager *data_device_manager
 );
@@ -90,13 +89,11 @@ gboolean wayland_data_device_is_valid(WaylandDataDevice *data_device);
 gboolean wayland_data_source_is_valid(WaylandDataSource *data_source);
 gboolean wayland_data_offer_is_valid(WaylandDataOffer *data_offer);
 
-// ----- Object Lifecycle -----
 void wayland_data_device_destroy(WaylandDataDevice *device);
 void wayland_data_source_destroy(WaylandDataSource *source);
 void wayland_data_offer_destroy(WaylandDataOffer *offer);
 void wayland_data_device_manager_unused(WaylandDataDeviceManager *manager);
 
-// ----- Object Creation -----
 WaylandDataDevice *wayland_data_device_manager_get_data_device(
     WaylandDataDeviceManager *manager, WaylandSeat *seat
 );
@@ -105,20 +102,16 @@ WaylandDataSource *wayland_data_device_manager_create_data_source(
     WaylandDataDeviceManager *manager
 );
 
-// ----- Data Operations -----
 void wayland_data_device_set_seletion(
     WaylandDataDevice *device, WaylandDataSource *source,
     ClipporSelectionType selection
 );
-
 void
 wayland_data_source_offer(WaylandDataSource *source, const char *mime_type);
-
 void wayland_data_offer_receive(
     WaylandDataOffer *offer, const char *mime_type, int32_t fd
 );
 
-// ----- Listener Registration -----
 void wayland_data_device_add_listener(
     WaylandDataDevice *device, WaylandDataDeviceListener *listener, void *data
 );

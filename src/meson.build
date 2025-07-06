@@ -1,4 +1,4 @@
-sources += files('clippor-entry.c', 'clippor-clipboard.c', 'clippor-client.c', 'global.c', 'database.c', 'dbus-service.c', 'util.c')
+sources += files('clippor-entry.c', 'clippor-clipboard.c', 'clippor-client.c', 'database.c', 'dbus-service.c', 'util.c', 'config.c', 'server.c', 'tomlc17.c')
 includes += include_directories('include')
 
 gnome = import('gnome')
@@ -12,4 +12,3 @@ sources += gnome.gdbus_codegen('com.github.clippor',
   )
 
 subdir('wayland')
-subdir('tests')

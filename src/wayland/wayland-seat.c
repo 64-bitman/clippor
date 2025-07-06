@@ -1,6 +1,5 @@
-#include "util.h"
 #include "wayland-seat.h"
-#include "global.h"
+#include "util.h"
 #include "wayland-connection.h"
 #include <fcntl.h>
 #include <gio/gio.h>
@@ -32,7 +31,7 @@ typedef struct
                     // reference in case the entry is removed.
 
     // When there is a new offer, we remove the previous if any, save it
-    // here, and only attempt to receive from it when requests
+    // here, and only attempt to receive from it when requested
     WaylandDataOffer *offer;
 
     WaylandDataSource *source;
@@ -47,7 +46,7 @@ struct _WaylandSeat
     char *name;
     uint32_t numerical_name;
     enum wl_seat_capability capabilities;
-    int timeout; // Timeout when waiting for data.
+    int data_timeout; // Timeout when waiting for data.
 
     WaylandConnection *ct; // Parent connection
 
@@ -65,7 +64,7 @@ G_DEFINE_TYPE(WaylandSeat, wayland_seat, CLIPPOR_TYPE_CLIENT)
 
 typedef enum
 {
-    PROP_TIMEOUT = 1,
+    PROP_DATA_TIMEOUT = 1,
     N_PROPERTIES
 } WaylandSeatProperty;
 
@@ -103,8 +102,8 @@ wayland_seat_set_property(
 
     switch ((WaylandSeatProperty)property_id)
     {
-    case PROP_TIMEOUT:
-        self->timeout = g_value_get_uint(value);
+    case PROP_DATA_TIMEOUT:
+        self->data_timeout = g_value_get_int(value);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -121,8 +120,8 @@ wayland_seat_get_property(
 
     switch ((WaylandSeatProperty)property_id)
     {
-    case PROP_TIMEOUT:
-        g_value_set_uint(value, self->timeout);
+    case PROP_DATA_TIMEOUT:
+        g_value_set_int(value, self->data_timeout);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -170,9 +169,9 @@ wayland_seat_class_init(WaylandSeatClass *class)
     gobject_class->dispose = wayland_seat_dispose;
     gobject_class->finalize = wayland_seat_finalize;
 
-    obj_properties[PROP_TIMEOUT] = g_param_spec_uint(
-        "timeout", "Timeout", "Timeout to use when transferring data", 0,
-        G_MAXUINT, 500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
+    obj_properties[PROP_DATA_TIMEOUT] = g_param_spec_int(
+        "data-timeout", "Data timeout", "Timeout to use when transferring data",
+        -1, G_MAXINT, 500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
 
     g_object_class_install_properties(
@@ -214,8 +213,8 @@ wayland_seat_new(
     GError **error
 )
 {
-    g_return_val_if_fail(seat_proxy != NULL, NULL);
-    g_return_val_if_fail(error == NULL || *error == NULL, NULL);
+    g_assert(seat_proxy != NULL);
+    g_assert(error == NULL || *error == NULL);
 
     WaylandSeat *seat = g_object_new(WAYLAND_TYPE_SEAT, NULL);
 
@@ -235,10 +234,9 @@ wayland_seat_new(
     }
     seat->numerical_name = numerical_name;
 
-    if (SETTINGS != NULL)
-        g_settings_bind(
-            SETTINGS, "data-timeout", ct, "timeout", G_SETTINGS_BIND_DEFAULT
-        );
+    g_object_bind_property(
+        ct, "data-timeout", seat, "data-timeout", G_BINDING_DEFAULT
+    );
 
     return seat;
 }
@@ -266,7 +264,7 @@ wl_seat_listener_name(
 char *
 wayland_seat_get_name(WaylandSeat *self)
 {
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), NULL);
+    g_assert(WAYLAND_IS_SEAT(self));
 
     return self->name;
 }
@@ -275,7 +273,7 @@ uint32_t
 wayland_seat_get_numerical_name(WaylandSeat *self)
 {
     // Just give a warning message
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), self->numerical_name);
+    g_assert(WAYLAND_IS_SEAT(self));
 
     return self->numerical_name;
 }
@@ -283,7 +281,7 @@ wayland_seat_get_numerical_name(WaylandSeat *self)
 struct wl_seat *
 wayland_seat_get_proxy(WaylandSeat *self)
 {
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), NULL);
+    g_assert(WAYLAND_IS_SEAT(self));
 
     return self->proxy;
 }
@@ -506,7 +504,7 @@ data_source_event_send(
         goto exit;
     }
 
-    if (!util_send_data(fd, stuff, sel->parent->timeout, &error))
+    if (!util_send_data(fd, stuff, sel->parent->data_timeout, &error))
     {
         g_assert(error != NULL);
         g_message("Data source send event failed: %s", error->message);
@@ -594,14 +592,13 @@ roundtrip:
 
 /*
  * Get the mime types for the current offer or NULL if there is no offer.
- * Creates a new reference.
  */
 static GPtrArray *
 wayland_seat_client_get_mime_types(
     ClipporClient *self, ClipporSelectionType selection
 )
 {
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), NULL);
+    g_assert(WAYLAND_IS_SEAT(self));
 
     WaylandSeat *seat = WAYLAND_SEAT(self);
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
@@ -609,7 +606,7 @@ wayland_seat_client_get_mime_types(
     if (sel->offer == NULL)
         return NULL;
 
-    return g_ptr_array_ref(wayland_data_offer_get_mime_types(sel->offer));
+    return wayland_data_offer_get_mime_types(sel->offer);
 }
 
 static GBytes *
@@ -618,7 +615,7 @@ wayland_seat_client_get_data(
     GError **error
 )
 {
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), NULL);
+    g_assert(WAYLAND_IS_SEAT(self));
 
     WaylandSeat *seat = WAYLAND_SEAT(self);
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
@@ -644,7 +641,7 @@ wayland_seat_client_get_data(
     close(fds[1]);
 
     if (wayland_connection_flush(seat->ct, error))
-        data = util_receive_data(fds[0], seat->timeout, error);
+        data = util_receive_data(fds[0], seat->data_timeout, error);
 
     close(fds[0]);
 
@@ -657,7 +654,7 @@ wayland_seat_client_set_entry(
     GError **error
 )
 {
-    g_return_val_if_fail(WAYLAND_IS_SEAT(self), FALSE);
+    g_assert(WAYLAND_IS_SEAT(self));
 
     WaylandSeat *seat = WAYLAND_SEAT(self);
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);

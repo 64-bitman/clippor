@@ -22,6 +22,7 @@ GObject *clippor_entry_is_from(ClipporEntry *self);
 void clippor_entry_add_mime_type(
     ClipporEntry *self, const char *mime_type, GBytes *data
 );
+gboolean clippor_entry_has_mime_type(ClipporEntry *self, const char *mime_type);
 
 gboolean clippor_entry_is_starred(ClipporEntry *self);
 

@@ -115,3 +115,24 @@ poll_data:
 
     return g_byte_array_free_to_bytes(data);
 }
+
+/*
+ * Return value of environemnt variable in form of $<NAME>. If string doesn't
+ * start with '$' or is a non-existent environment variable, then return
+ * unchanged but in a newly alloced string.
+ */
+char *
+util_expand_env(const char *name)
+{
+    g_assert(name != NULL);
+
+    if (name[0] != '$')
+        return g_strdup(name);
+
+    const char *val = g_getenv(name + 1);
+
+    if (val == NULL)
+        return g_strdup(name);
+
+    return g_strdup(val);
+}
