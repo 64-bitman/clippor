@@ -21,6 +21,10 @@
         <method name='RemoveEntry'>
             <arg name='id' type='s' direction='in'/>
         </method>
+        <method name='EntryExists'>
+            <arg name='id' type='s' direction='in'/>
+            <arg name='exists' type='b' direction='out'/>
+        </method>
         <method name='ClearHistory'/>
         <method name='SetEntryData'>
             <arg name='id' type='s' direction='in'/>

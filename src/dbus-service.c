@@ -286,7 +286,35 @@ get_entries_count_method_cb(
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
+static gboolean
+remove_entry_method_cb(
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    const char *id, gpointer user_data
+)
+{
+    ClipporClipboard *cb = user_data;
 
+    GError *error = NULL;
+
+    if (!clippor_clipboard_remove_entry(cb, id, &error))
+    {
+        g_assert(error != NULL);
+        char *msg =
+            g_strdup_printf("Failed removing entry: %s", error->message);
+        g_error_free(error);
+
+        g_dbus_method_invocation_return_dbus_error(
+            invocation,
+            "com.github.clippor.ObjectManager.Error.FailedRemovingEntry", msg
+        );
+        g_free(msg);
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+    bus_clippor_clipboard_complete_remove_entry(object, invocation);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
 
 void
 dbus_service_add_clipboard(ClipporClipboard *cb)
@@ -319,6 +347,9 @@ dbus_service_add_clipboard(ClipporClipboard *cb)
     g_signal_connect(
         iface, "handle-get-entries-count",
         G_CALLBACK(get_entries_count_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-remove-entry", G_CALLBACK(remove_entry_method_cb), cb
     );
 
     g_dbus_object_manager_server_export(

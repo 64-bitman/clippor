@@ -78,12 +78,14 @@ clippor_client_get_data(
 }
 
 /*
- * Sets the current entry of the client, essentially setting the selection.
+ * Sets the current entry of the client, essentially setting the selection. If
+ * "update" is TRUE, then only set the selection if the current entry has been
+ * removed/does not exist, else clear the selection.
  */
 gboolean
 clippor_client_set_entry(
     ClipporClient *self, ClipporEntry *entry, ClipporSelectionType selection,
-    GError **error
+    gboolean update, GError **error
 )
 {
     g_assert(CLIPPOR_IS_CLIENT(self));
@@ -94,18 +96,22 @@ clippor_client_set_entry(
 
     //  Don't want to immediately steal the selection when there is a new one
     //  (Only if selection is the same).
-    if (clippor_entry_get_selection(entry) == selection)
+    if (entry != NULL && clippor_entry_get_selection(entry) == selection)
         if (clippor_entry_is_from(entry) == self)
             return TRUE;
 
-    GHashTableIter iter;
+    if (entry != NULL)
+    {
+        GHashTableIter iter;
 
-    g_hash_table_iter_init(&iter, clippor_entry_get_mime_types(entry));
-    // No point in setting selection if there are no mime types in entry
-    if (!g_hash_table_iter_next(&iter, NULL, NULL))
-        return TRUE;
+        g_hash_table_iter_init(&iter, clippor_entry_get_mime_types(entry));
+
+        // No point in setting selection if there are no mime types in entry
+        if (!g_hash_table_iter_next(&iter, NULL, NULL))
+            return TRUE;
+    }
 
     return class->set_entry == NULL
                ? FALSE
-               : class->set_entry(self, entry, selection, error);
+               : class->set_entry(self, entry, selection, update, error);
 }

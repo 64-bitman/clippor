@@ -7,6 +7,8 @@
 #include <inttypes.h>
 #include <stdint.h>
 
+G_DEFINE_QUARK(clippor_clipboard_error_quark, clippor_clipboard_error)
+
 G_DEFINE_ENUM_TYPE(
     ClipporSelectionType, clippor_selection_type,
     G_DEFINE_ENUM_VALUE(CLIPPOR_SELECTION_TYPE_NONE, "none"),
@@ -262,11 +264,20 @@ clippor_clipboard_add_entry(
     g_assert(CLIPPOR_IS_ENTRY(entry));
     g_assert(error == NULL || *error == NULL);
 
-    if (!database_trim_entries(self, error))
-        return FALSE;
+    if (self->max_entries > 0)
+        if (!database_trim_entries(self, error))
+        {
+            g_prefix_error_literal(
+                error, "Failed trimming entries in database: "
+            );
+            return FALSE;
+        }
 
     if (!database_add_entry(entry, error))
+    {
+        g_prefix_error_literal(error, "Failed adding entry to database: ");
         return FALSE;
+    }
 
     // If max_entries_memory is 0 then have indefinite number of entries.
     if (self->max_entries_memory > 0)
@@ -277,6 +288,74 @@ clippor_clipboard_add_entry(
     g_queue_push_head(self->entries, entry);
 
     return TRUE;
+}
+
+/*
+ * Update client selections. If "update" is TRUE, then only set entry if
+ * clients check that the entry that are referencing has been removed.
+ */
+static void
+clippor_clipboard_update_clients(
+    ClipporClipboard *self, ClipporEntry *entry, gboolean update
+)
+{
+    GHashTableIter iter;
+    char *label;
+    GWeakRef *weak_ref;
+
+    g_hash_table_iter_init(&iter, self->clients);
+
+    while (
+        g_hash_table_iter_next(&iter, (gpointer *)&label, (gpointer *)&weak_ref)
+    )
+    {
+        ClipporClient *client = g_weak_ref_get(weak_ref);
+        GError *error = NULL;
+
+        if (client == NULL)
+        {
+            // Client was finalized, remove it
+            g_hash_table_iter_remove(&iter);
+            g_hash_table_remove(self->selections, client);
+        }
+
+        // Set the respective entry to the current one
+        g_assert(g_hash_table_contains(self->selections, client));
+
+        uint sel_bitmask =
+            GPOINTER_TO_UINT(g_hash_table_lookup(self->selections, client));
+        gboolean ret = TRUE;
+
+        if (sel_bitmask & CLIPPOR_SELECTION_TYPE_REGULAR)
+            ret = clippor_client_set_entry(
+                client, entry, CLIPPOR_SELECTION_TYPE_REGULAR, update, &error
+            );
+
+        if (!ret)
+        {
+            g_message(
+                "Failed setting/updating entry for regular selection of client "
+                "'%s': %s",
+                label, error->message
+            );
+            g_clear_error(&error);
+        }
+
+        if (sel_bitmask & CLIPPOR_SELECTION_TYPE_PRIMARY)
+            ret = clippor_client_set_entry(
+                client, entry, CLIPPOR_SELECTION_TYPE_PRIMARY, update, &error
+            );
+
+        if (!ret)
+        {
+            g_message(
+                "Failed setting/updating entry for primary selection of client "
+                "'%s': %s",
+                label, error->message
+            );
+            g_clear_error(&error);
+        }
+    }
 }
 
 /*
@@ -392,37 +471,7 @@ skip:
 
     // Update clients (includes the source client too, because we need to keep
     // their current entry up to date)
-    GHashTableIter iter;
-    GWeakRef *weak_ref;
-
-    g_hash_table_iter_init(&iter, cb->clients);
-
-    while (g_hash_table_iter_next(&iter, NULL, (gpointer *)&weak_ref))
-    {
-        ClipporClient *client = g_weak_ref_get(weak_ref);
-
-        if (client == NULL)
-        {
-            // Client was finalized, remove it
-            g_hash_table_iter_remove(&iter);
-            g_hash_table_remove(cb->selections, client);
-        }
-
-        // Set the respective entry to the current one
-        g_assert(g_hash_table_contains(cb->selections, client));
-
-        uint sel_bitmask =
-            (uint64_t)g_hash_table_lookup(cb->selections, client);
-
-        if (sel_bitmask & CLIPPOR_SELECTION_TYPE_REGULAR)
-            clippor_client_set_entry(
-                client, entry, CLIPPOR_SELECTION_TYPE_REGULAR, &error
-            );
-        if (sel_bitmask & CLIPPOR_SELECTION_TYPE_PRIMARY)
-            clippor_client_set_entry(
-                client, entry, CLIPPOR_SELECTION_TYPE_PRIMARY, &error
-            );
-    }
+    clippor_clipboard_update_clients(cb, entry, FALSE);
 }
 
 void
@@ -449,14 +498,15 @@ clippor_clipboard_add_client(
     else
     {
         g_assert(g_hash_table_contains(self->selections, client));
-        sel_bitmask |= (uint64_t)g_hash_table_lookup(self->selections, client);
+        sel_bitmask |=
+            GPOINTER_TO_UINT(g_hash_table_lookup(self->selections, client));
     }
 
     // Set bitmask
     sel_bitmask |= selection;
 
     g_hash_table_insert(
-        self->selections, client, (void *)(uint64_t)sel_bitmask
+        self->selections, client, GUINT_TO_POINTER(sel_bitmask)
     );
 
     // Update client selection
@@ -465,7 +515,7 @@ clippor_clipboard_add_client(
     GError *error = NULL;
 
     if (entry != NULL)
-        clippor_client_set_entry(client, entry, selection, &error);
+        clippor_client_set_entry(client, entry, selection, FALSE, &error);
 
     char *signal_name;
 
@@ -495,7 +545,7 @@ clippor_clipboard_get_entry(
     ClipporEntry *entry;
 
     // If index is outside the in memory list, search the database. Unless
-    // max_entries is 0 then all entries are stored in memory.
+    // max_entries_memory is 0 then all entries are stored in memory.
     if (self->max_entries_memory > 0 && index > self->max_entries_memory)
         entry = database_deserialize_entry(self, index, NULL, error);
     else
@@ -504,7 +554,8 @@ clippor_clipboard_get_entry(
 
         if (entry == NULL)
             g_set_error(
-                error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
+                error, CLIPPOR_CLIPBOARD_ERROR,
+                CLIPPOR_CLIPBOARD_ERROR_NO_ENTRY,
                 "No such entry with index %" PRIu64 " in history", index
             );
 
@@ -556,4 +607,54 @@ clippor_clipboard_get_max_entries(ClipporClipboard *self)
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
 
     return self->max_entries;
+}
+
+static int
+clippor_entry_compare_id_func(gconstpointer data, gconstpointer user_data)
+{
+    return g_strcmp0(
+        clippor_entry_get_id(CLIPPOR_ENTRY((ClipporEntry *)data)), user_data
+    );
+}
+
+/*
+ * Remove entry with id from clipboard history
+ */
+gboolean
+clippor_clipboard_remove_entry(
+    ClipporClipboard *self, const char *id, GError **error
+)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(error == NULL || *error == NULL);
+    g_assert(self != NULL);
+    g_assert(id != NULL);
+
+    GList *e =
+        g_queue_find_custom(self->entries, id, clippor_entry_compare_id_func);
+
+    if (e != NULL)
+    {
+        // Remove entry from in memory hisotry
+        g_object_unref(e->data);
+        g_queue_unlink(self->entries, e);
+        g_list_free_1(e);
+    }
+
+    // Remove entry from database
+    if (!database_remove_id(id, error))
+    {
+        g_prefix_error(
+            error, "Failed removing entry from clipboard '%s': ", self->label
+        );
+        return FALSE;
+    }
+
+    // Update selections to latest entry for all clients if they are possibly
+    // were referencing removed entry.
+    clippor_clipboard_update_clients(
+        self, g_queue_peek_head(self->entries), TRUE
+    );
+
+    return TRUE;
 }

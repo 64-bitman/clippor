@@ -18,6 +18,15 @@ typedef enum
     CLIPPOR_SELECTION_TYPE_PRIMARY = 1 << 1
 } ClipporSelectionType;
 
+#define CLIPPOR_CLIPBOARD_ERROR (clippor_clipboard_error_quark())
+
+typedef enum
+{
+    CLIPPOR_CLIPBOARD_ERROR_NO_ENTRY
+} ClipporClipboardError;
+
+GQuark clippor_clipboard_error_quark(void);
+
 typedef struct _ClipporClient ClipporClient;
 typedef struct _ClipporEntry ClipporEntry;
 
@@ -46,3 +55,7 @@ const char *clippor_clipboard_get_label(ClipporClipboard *self);
 
 int64_t clippor_clipboard_get_max_entries_memory(ClipporClipboard *self);
 int64_t clippor_clipboard_get_max_entries(ClipporClipboard *self);
+
+gboolean clippor_clipboard_remove_entry(
+    ClipporClipboard *self, const char *id, GError **error
+);

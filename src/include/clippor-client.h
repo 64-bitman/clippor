@@ -37,7 +37,7 @@ struct _ClipporClientClass
     );
     gboolean (*set_entry)(
         ClipporClient *self, ClipporEntry *entry,
-        ClipporSelectionType selection, GError **error
+        ClipporSelectionType selection, gboolean update, GError **error
     );
 };
 
@@ -50,5 +50,5 @@ GBytes *clippor_client_get_data(
 );
 gboolean clippor_client_set_entry(
     ClipporClient *self, ClipporEntry *entry, ClipporSelectionType selection,
-    GError **error
+    gboolean update, GError **error
 );

@@ -122,6 +122,10 @@ database_init(GError **error)
     }
 
     // Setup main table where the history is stored
+    //
+    // Don't see much value in foreign keys for mapping Main id to Map id,
+    // requires an extra loop through mime types when adding an entry + a
+    // discrepency is not a big deal.
     statement = "CREATE TABLE IF NOT EXISTS Main ("
                 "Position INTEGER PRIMARY KEY AUTOINCREMENT,"
                 "Id char(40) NOT NULL,"
@@ -642,6 +646,51 @@ database_get_entry_index(ClipporEntry *entry, GError **error)
 }
 
 /*
+ * Returns number of ids that reference a data_id, else -1 on error.
+ */
+static int
+database_num_id_own_data_id(const char *data_id, GError **error)
+{
+    g_assert(data_id != NULL);
+    g_assert(error == NULL || *error == NULL);
+
+    const char *statement = "SELECT COUNT(DISTINCT Id) FROM Map "
+                            "WHERE Data_id = ?;";
+    sqlite3_stmt *stmt;
+
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
+
+    if (ret != SQLITE_OK)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed preparing SELECT statement: %s", sqlite3_errmsg(DB)
+        );
+        return -1;
+    }
+
+    sqlite3_bind_text(stmt, 1, data_id, -1, SQLITE_STATIC);
+
+    ret = sqlite3_step(stmt);
+
+    if (ret == SQLITE_ROW)
+    {
+        int num = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+        return num;
+    }
+    else
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
+        );
+
+    sqlite3_finalize(stmt);
+
+    return -1;
+}
+
+/*
  * Remove rows with given id from 'Map' table in database, including the data
  * files they map to.
  */
@@ -671,10 +720,23 @@ database_remove_mime_types(const char *id, GError **error)
     while ((ret = sqlite3_step(stmt)) == SQLITE_ROW)
     {
         const char *data_id = (const char *)sqlite3_column_text(stmt, 0);
-        char *path = g_strdup_printf("%s/%s", DATA_DIR, data_id);
+        int num = database_num_id_own_data_id(data_id, error);
 
-        g_remove(data_id);
-        g_free(path);
+        if (num == -1)
+        {
+            g_prefix_error_literal(error, "Failed removing mime type: ");
+            sqlite3_finalize(stmt);
+            return FALSE;
+        }
+
+        // Only remove file if no other ids are referencing it
+        if (num <= 1)
+        {
+            char *path = g_strdup_printf("%s/%s", DATA_DIR, data_id);
+
+            g_remove(path);
+            g_free(path);
+        }
     }
 
     sqlite3_finalize(stmt);
@@ -764,10 +826,7 @@ database_trim_entries(ClipporClipboard *cb, GError **error)
         if (!database_remove_mime_types(id, &error2))
         {
             g_assert(error2 != NULL);
-            g_warning(
-                "Failed deleting file while trimming entries: %s",
-                error2->message
-            );
+            g_warning("Failed removing mime type: %s", error2->message);
             g_error_free(error2);
             continue;
         }
@@ -820,4 +879,44 @@ database_trim_entries(ClipporClipboard *cb, GError **error)
         return FALSE;
     }
     return TRUE;
+}
+
+/*
+ * Remove row with id from 'Main' table and 'Map' table
+ * TODO: error if id doesnt exist
+ */
+gboolean
+database_remove_id(const char *id, GError **error)
+{
+    g_assert(id != NULL);
+    g_assert(error == NULL || *error == NULL);
+
+    const char *statement = "DELETE FROM Main "
+                            "WHERE Id = ?;";
+    sqlite3_stmt *stmt;
+
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
+
+    if (ret != SQLITE_OK)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed preparing DELETE statement: %s", sqlite3_errmsg(DB)
+        );
+        return -1;
+    }
+
+    sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
+
+    ret = sqlite3_step(stmt);
+
+    if (ret != SQLITE_DONE && ret != SQLITE_ROW)
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
+        );
+
+    sqlite3_finalize(stmt);
+
+    return database_remove_mime_types(id, error);
 }

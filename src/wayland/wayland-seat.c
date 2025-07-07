@@ -91,7 +91,7 @@ static GBytes *wayland_seat_client_get_data(
 );
 static gboolean wayland_seat_client_set_entry(
     ClipporClient *self, ClipporEntry *entry, ClipporSelectionType selection,
-    GError **error
+    gboolean update, GError **error
 );
 
 static void
@@ -652,15 +652,17 @@ wayland_seat_client_get_data(
 static gboolean
 wayland_seat_client_set_entry(
     ClipporClient *self, ClipporEntry *entry, ClipporSelectionType selection,
-    GError **error
+    gboolean update, GError **error
 )
 {
     g_assert(WAYLAND_IS_SEAT(self));
 
     WaylandSeat *seat = WAYLAND_SEAT(self);
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
+    ClipporEntry *entry_ref = g_weak_ref_get(&sel->entry);
 
-    g_weak_ref_set(&sel->entry, entry);
+    if ((update && entry_ref == NULL) || !update)
+        g_weak_ref_set(&sel->entry, entry);
 
     if (!wayland_seat_update_selection(seat, sel->type, FALSE, error))
     {

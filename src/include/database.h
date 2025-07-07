@@ -34,3 +34,5 @@ int64_t database_get_num_entries(ClipporClipboard *cb, GError **error);
 int64_t database_get_entry_index(ClipporEntry *entry, GError **error);
 
 gboolean database_trim_entries(ClipporClipboard *cb, GError **error);
+
+gboolean database_remove_id(const char *id, GError **error);
