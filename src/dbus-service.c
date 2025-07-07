@@ -120,6 +120,29 @@ dbus_server_uninit(void)
     }
 }
 
+#define DBUS_ERROR(errname, errmsg)                                            \
+    do                                                                         \
+    {                                                                          \
+        g_dbus_method_invocation_return_dbus_error(                            \
+            invocation, "com.github.clippor.ObjectManager.Error." errname,     \
+            errmsg                                                             \
+        );                                                                     \
+        return G_DBUS_METHOD_INVOCATION_HANDLED;                               \
+    } while (FALSE)
+
+#define DBUS_ERRORE(errname, errmsg)                                           \
+    do                                                                         \
+    {                                                                          \
+        g_assert(error != NULL);                                               \
+        char *msg = g_strdup_printf(errmsg ": %s", error->message);            \
+        g_error_free(error);                                                   \
+        g_dbus_method_invocation_return_dbus_error(                            \
+            invocation, "com.github.clippor.ObjectManager.Error." errname, msg \
+        );                                                                     \
+        g_free(msg);                                                           \
+        return G_DBUS_METHOD_INVOCATION_HANDLED;                               \
+    } while (FALSE)
+
 static gboolean
 get_entry_info_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
@@ -138,20 +161,7 @@ get_entry_info_method_cb(
     ClipporEntry *entry = clippor_clipboard_get_entry(cb, index, &error);
 
     if (entry == NULL)
-    {
-        g_assert(error != NULL);
-        char *msg = g_strdup_printf(
-            "Failed getting entry from database: %s", error->message
-        );
-        g_error_free(error);
-
-        g_dbus_method_invocation_return_dbus_error(
-            invocation,
-            "com.github.clippor.ObjectManager.Error.FailedGettingEntry", msg
-        );
-        g_free(msg);
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-    }
+        DBUS_ERRORE("FailedGettingEntry", "Failed getting entry from database");
 
     g_object_get(
         entry, "id", &id, "creation-time", &creation_time, "last-used-time",
@@ -186,69 +196,35 @@ get_mime_type_data_method_cb(
     GUnixFDList *fd_list = g_dbus_message_get_unix_fd_list(message);
 
     if (g_unix_fd_list_get_length(fd_list) == 0)
-    {
-        g_dbus_method_invocation_return_dbus_error(
-            invocation, "com.github.clippor.ObjectManager.Error.EmptyFDList",
-            "FD list is empty"
-        );
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-    }
+        DBUS_ERROR("EmptyFDList", "FD list is empty");
 
-    char *err_msg, *err_suffix;
     GError *error = NULL;
     int fd = g_unix_fd_list_get(fd_list, fd_index, &error);
 
     if (fd == -1)
-    {
-        err_msg = "Failed getting file descriptor from list";
-        err_suffix = "FailedGettingFd";
-        goto fail;
-    }
+        DBUS_ERRORE(
+            "FailedGettingFD", "Failed getting file descriptor from list"
+        );
 
     ClipporEntry *entry = clippor_clipboard_get_entry_by_id(cb, id, &error);
 
     if (entry == NULL)
-    {
-        err_msg = "Failed getting entry";
-        err_suffix = "FailedGettingEntry";
-        goto fail;
-    }
+        DBUS_ERRORE("FailedGettingEntry", "Failed getting entry");
 
     GBytes *data = clippor_entry_get_data(entry, mime_type, &error);
 
     if (data == NULL)
-    {
-        err_msg = "Failed getting entry data for mime type";
-        err_suffix = "FailedGettingMimeTypeData";
-        goto fail;
-    }
+        DBUS_ERRORE(
+            "FailedGettingMimeTypeData", "Failed getting data for mime type"
+        );
 
     if (!util_send_data(fd, data, TIMEOUT, &error))
-    {
-        err_msg = "Failed sending data";
-        err_suffix = "FailedSendingData";
-        goto fail;
-    }
+        DBUS_ERRORE("FailedSendingData", "Failed sending data");
 
     g_bytes_unref(data);
     g_object_unref(entry);
 
     bus_clippor_clipboard_complete_get_mime_type_data(object, invocation);
-
-    return G_DBUS_METHOD_INVOCATION_HANDLED;
-fail:
-    g_assert(error != NULL);
-
-    char *msg = g_strdup_printf("%s: %s", err_msg, error->message);
-    char *err_name = g_strdup_printf(
-        "com.github.clippor.ObjectManager.Error.%s", err_suffix
-    );
-
-    g_error_free(error);
-
-    g_dbus_method_invocation_return_dbus_error(invocation, err_name, msg);
-    g_free(msg);
-    g_free(err_name);
 
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
@@ -265,21 +241,10 @@ get_entries_count_method_cb(
     int64_t num = database_get_num_entries(cb, &error);
 
     if (num == -1)
-    {
-        g_assert(error != NULL);
-        char *msg = g_strdup_printf(
-            "Failed getting entry count from database: %s", error->message
+        DBUS_ERRORE(
+            "FailedGettingEntryCount",
+            "Failed getting entry count from database"
         );
-        g_error_free(error);
-
-        g_dbus_method_invocation_return_dbus_error(
-            invocation,
-            "com.github.clippor.ObjectManager.Error.FailedGettingEntryCount",
-            msg
-        );
-        g_free(msg);
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-    }
 
     bus_clippor_clipboard_complete_get_entries_count(object, invocation, num);
 
@@ -293,25 +258,48 @@ remove_entry_method_cb(
 )
 {
     ClipporClipboard *cb = user_data;
-
     GError *error = NULL;
 
     if (!clippor_clipboard_remove_entry(cb, id, &error))
-    {
-        g_assert(error != NULL);
-        char *msg =
-            g_strdup_printf("Failed removing entry: %s", error->message);
-        g_error_free(error);
-
-        g_dbus_method_invocation_return_dbus_error(
-            invocation,
-            "com.github.clippor.ObjectManager.Error.FailedRemovingEntry", msg
-        );
-        g_free(msg);
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-    }
+        DBUS_ERRORE("FailedRemovingEntry", "Failed removing entry");
 
     bus_clippor_clipboard_complete_remove_entry(object, invocation);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+entry_exists_method_cb(
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    const char *id, gpointer user_data G_GNUC_UNUSED
+)
+{
+    GError *error = NULL;
+    int ret = database_entry_id_exists(id, &error);
+
+    if (ret == -1)
+        DBUS_ERRORE(
+            "FailedCheckingEntry", "Failed checking if entry id exists"
+        );
+
+    bus_clippor_clipboard_complete_entry_exists(object, invocation, ret == 0);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+clear_history_method_cb(
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    gpointer user_data
+)
+{
+    ClipporClipboard *cb = user_data;
+    GError *error = NULL;
+
+    if (!clippor_clipboard_clear_history(cb, &error))
+        DBUS_ERRORE("FailedClearingHistory", "Failed clearing history");
+
+    bus_clippor_clipboard_complete_clear_history(object, invocation);
 
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
@@ -350,6 +338,12 @@ dbus_service_add_clipboard(ClipporClipboard *cb)
     );
     g_signal_connect(
         iface, "handle-remove-entry", G_CALLBACK(remove_entry_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-entry-exists", G_CALLBACK(entry_exists_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-clear-history", G_CALLBACK(clear_history_method_cb), cb
     );
 
     g_dbus_object_manager_server_export(

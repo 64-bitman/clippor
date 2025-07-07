@@ -3,6 +3,10 @@
 #define STRING(s) _STRING(s)
 #define _STRING(s) #s
 
+#define GFOREACH(item, list)                                                   \
+    for (GList *__glist = list; __glist && (item = __glist->data, TRUE);       \
+         __glist = __glist->next)
+
 #define UTIL_ERROR (util_error_quark())
 
 typedef enum

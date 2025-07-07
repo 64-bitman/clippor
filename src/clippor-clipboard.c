@@ -3,6 +3,7 @@
 #include "clippor-entry.h"
 #include "database.h"
 #include "dbus-service.h"
+#include "util.h"
 #include <glib-object.h>
 #include <inttypes.h>
 #include <stdint.h>
@@ -265,7 +266,7 @@ clippor_clipboard_add_entry(
     g_assert(error == NULL || *error == NULL);
 
     if (self->max_entries > 0)
-        if (!database_trim_entries(self, error))
+        if (!database_trim_entries(self, FALSE, error))
         {
             g_prefix_error_literal(
                 error, "Failed trimming entries in database: "
@@ -637,8 +638,7 @@ clippor_clipboard_remove_entry(
     {
         // Remove entry from in memory hisotry
         g_object_unref(e->data);
-        g_queue_unlink(self->entries, e);
-        g_list_free_1(e);
+        g_queue_delete_link(self->entries, e);
     }
 
     // Remove entry from database
@@ -655,6 +655,27 @@ clippor_clipboard_remove_entry(
     clippor_clipboard_update_clients(
         self, g_queue_peek_head(self->entries), TRUE
     );
+
+    return TRUE;
+}
+
+gboolean
+clippor_clipboard_clear_history(ClipporClipboard *self, GError **error)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(error == NULL || *error == NULL);
+
+    g_queue_clear_full(self->entries, g_object_unref);
+
+    if (!database_trim_entries(self, TRUE, error))
+    {
+        g_prefix_error(
+            error, "Failed clearing database for clipboard '%s': ", self->label
+        );
+        return FALSE;
+    }
+
+    clippor_clipboard_update_clients(self, NULL, FALSE);
 
     return TRUE;
 }

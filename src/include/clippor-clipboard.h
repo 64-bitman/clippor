@@ -59,3 +59,6 @@ int64_t clippor_clipboard_get_max_entries(ClipporClipboard *self);
 gboolean clippor_clipboard_remove_entry(
     ClipporClipboard *self, const char *id, GError **error
 );
+
+gboolean
+clippor_clipboard_clear_history(ClipporClipboard *self, GError **error);
