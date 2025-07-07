@@ -72,11 +72,10 @@ config_populate(Config *config, const char *config_file, GError **error)
         TOML_ERROR(result.errmsg);
 
     toml_datum_t dbus_timeout = toml_seek(result.toptab, "dbus_timeout");
+    toml_datum_t dbus_service = toml_seek(result.toptab, "dbus_service");
 
-    if (TOML_IS_NOT_TYPE(dbus_timeout, TOML_INT64))
-        TOML_ERROR("'dbus_timeout' is not an integer");
-    else if (dbus_timeout.type == TOML_UNKNOWN)
-        config->dbus_timeout = dbus_timeout.u.int64;
+    TOML_SET(dbus_timeout, u.int64, config->dbus_timeout, 500);
+    TOML_SET(dbus_service, u.boolean, config->dbus_service, TRUE);
 
     toml_datum_t clipboards = toml_seek(result.toptab, "clipboards");
 

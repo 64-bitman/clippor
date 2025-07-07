@@ -32,6 +32,7 @@ typedef struct {
 
 typedef struct
 {
+    gboolean dbus_service;
     int dbus_timeout;
 
     GArray *clipboards;

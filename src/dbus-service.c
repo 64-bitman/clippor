@@ -7,6 +7,7 @@
 #include <gio-unix-2.0/gio/gunixoutputstream.h>
 #include <gio/gio.h>
 
+gboolean DBUS_READY = FALSE;
 static GDBusConnection *DBUS_SERVICE_CONNECTION;
 static uint DBUS_SERVICE_IDENTIFIER;
 static GDBusObjectManagerServer *DBUS_SERVICE_OBJ_MANAGER;
@@ -20,8 +21,7 @@ bus_acquired_cb(
 )
 {
     DBUS_SERVICE_CONNECTION = connection;
-    DBUS_SERVICE_OBJ_MANAGER =
-        g_dbus_object_manager_server_new("/com/github/clippor");
+    DBUS_SERVICE_OBJ_MANAGER = g_dbus_object_manager_server_new("/com/github");
 }
 
 static void
@@ -49,6 +49,25 @@ name_lost_cb(
     g_main_loop_quit(server_get_main_loop());
 }
 
+static gboolean
+list_clipboards_method_cb(
+    BusClippor *object, GDBusMethodInvocation *invocation,
+    gpointer user_data G_GNUC_UNUSED
+)
+{
+    const GPtrArray *cbs = server_get_clipboards();
+    const char **names = g_malloc0_n(cbs->len + 1, sizeof(char *));
+
+    for (uint i = 0; i < cbs->len; i++)
+        names[i] = clippor_clipboard_get_label(cbs->pdata[i]);
+
+    bus_clippor_complete_list_clipboards(object, invocation, names);
+
+    g_free(names);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
 gboolean
 dbus_service_init(GError **error, int timeout)
 {
@@ -64,20 +83,47 @@ dbus_service_init(GError **error, int timeout)
     // Run main loop until we acquire name.
     g_main_loop_run(server_get_main_loop());
 
+    // Create central interface and object
+    BusObjectSkeleton *object = bus_object_skeleton_new("/com/github/clippor");
+    BusClippor *iface = bus_clippor_skeleton_new();
+
+    bus_object_skeleton_set_clippor(object, iface);
+    g_object_unref(iface);
+
+    g_signal_connect(
+        iface, "handle-list-clipboards", G_CALLBACK(list_clipboards_method_cb),
+        NULL
+    );
+
+    g_dbus_object_manager_server_export(
+        DBUS_SERVICE_OBJ_MANAGER, G_DBUS_OBJECT_SKELETON(object)
+    );
+    g_object_unref(object);
+
+    g_dbus_object_manager_server_set_connection(
+        DBUS_SERVICE_OBJ_MANAGER, DBUS_SERVICE_CONNECTION
+    );
+
+    DBUS_READY = TRUE;
+
     return TRUE;
 }
 
 void
 dbus_server_uninit(void)
 {
-    g_object_unref(DBUS_SERVICE_OBJ_MANAGER);
-    g_bus_unown_name(DBUS_SERVICE_IDENTIFIER);
+    if (DBUS_READY)
+    {
+        g_object_unref(DBUS_SERVICE_OBJ_MANAGER);
+        g_bus_unown_name(DBUS_SERVICE_IDENTIFIER);
+        DBUS_READY = FALSE;
+    }
 }
 
 static gboolean
 get_entry_info_method_cb(
-    BusClippor *object, GDBusMethodInvocation *invocation, int64_t index,
-    gpointer data
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    int64_t index, gpointer data
 )
 {
     ClipporClipboard *cb = data;
@@ -115,7 +161,7 @@ get_entry_info_method_cb(
         clippor_entry_get_mime_types(entry), &sz
     );
 
-    bus_clippor_complete_get_entry_info(
+    bus_clippor_clipboard_complete_get_entry_info(
         object, invocation, id, creation_time, last_used_time, starred,
         mime_types
     );
@@ -129,8 +175,9 @@ get_entry_info_method_cb(
 
 static gboolean
 get_mime_type_data_method_cb(
-    BusClippor *object, GDBusMethodInvocation *invocation, const char *id,
-    const char *mime_type, GVariant *fd_variant, gpointer user_data
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    const char *id, const char *mime_type, GVariant *fd_variant,
+    gpointer user_data
 )
 {
     ClipporClipboard *cb = user_data;
@@ -186,7 +233,7 @@ get_mime_type_data_method_cb(
     g_bytes_unref(data);
     g_object_unref(entry);
 
-    bus_clippor_complete_get_mime_type_data(object, invocation);
+    bus_clippor_clipboard_complete_get_mime_type_data(object, invocation);
 
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 fail:
@@ -208,7 +255,8 @@ fail:
 
 static gboolean
 get_entries_count_method_cb(
-    BusClippor *object, GDBusMethodInvocation *invocation, gpointer user_data
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    gpointer user_data
 )
 {
     ClipporClipboard *cb = user_data;
@@ -233,26 +281,33 @@ get_entries_count_method_cb(
         return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
-    bus_clippor_complete_get_entries_count(object, invocation, num);
+    bus_clippor_clipboard_complete_get_entries_count(object, invocation, num);
 
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
+
+
 
 void
 dbus_service_add_clipboard(ClipporClipboard *cb)
 {
     g_assert(cb != NULL);
+
+    if (!DBUS_READY)
+        return;
+
     char *path = g_strdup_printf(
-        "/com/github/clippor/%s", clippor_clipboard_get_label(cb)
+        "/com/github/clippor/clipboards/%s", clippor_clipboard_get_label(cb)
     );
     BusObjectSkeleton *object = bus_object_skeleton_new(path);
 
     g_free(path);
 
     // Export interface for object
-    BusClippor *iface = bus_clippor_skeleton_new();
+    BusClipporClipboard *iface = bus_clippor_clipboard_skeleton_new();
 
-    bus_object_skeleton_set_clippor(object, iface);
+    bus_object_skeleton_set_clippor_clipboard(object, iface);
+    g_object_unref(iface);
 
     g_signal_connect(
         iface, "handle-get-entry-info", G_CALLBACK(get_entry_info_method_cb), cb

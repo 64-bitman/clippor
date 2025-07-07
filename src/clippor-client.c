@@ -1,4 +1,5 @@
 #include "clippor-client.h"
+#include "clippor-entry.h"
 #include <glib-object.h>
 #include <glib.h>
 
@@ -91,9 +92,11 @@ clippor_client_set_entry(
 
     ClipporClientClass *class = CLIPPOR_CLIENT_GET_CLASS(self);
 
-    //  Don't want to immediately steal the selection when there is a new one.
-    if (clippor_entry_is_from(entry) == G_OBJECT(self))
-        return TRUE;
+    //  Don't want to immediately steal the selection when there is a new one
+    //  (Only if selection is the same).
+    if (clippor_entry_get_selection(entry) == selection)
+        if (clippor_entry_is_from(entry) == self)
+            return TRUE;
 
     GHashTableIter iter;
 

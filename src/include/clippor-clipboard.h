@@ -1,6 +1,5 @@
 #pragma once
 
-#include "clippor-entry.h"
 #include <glib-object.h>
 #include <stdint.h>
 
@@ -20,6 +19,7 @@ typedef enum
 } ClipporSelectionType;
 
 typedef struct _ClipporClient ClipporClient;
+typedef struct _ClipporEntry ClipporEntry;
 
 GType clippor_selection_type_get_type(void);
 

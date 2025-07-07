@@ -1,4 +1,5 @@
 #include "wayland-seat.h"
+#include "clippor-entry.h"
 #include "util.h"
 #include "wayland-connection.h"
 #include <fcntl.h>

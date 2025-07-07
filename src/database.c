@@ -9,8 +9,8 @@
 
 G_DEFINE_QUARK(database_error_quark, database_error)
 
-static sqlite3 *db = NULL;
-static char *store_dir = NULL;
+static sqlite3 *DB = NULL;
+static char *STORE_DIR = NULL, *DATA_DIR = NULL;
 
 /*
  * Check if the database is outdated and update it. Create the version table if
@@ -29,7 +29,7 @@ update_database_version(GError **error)
                             "INSERT OR IGNORE INTO Version "
                             "VALUES (" STRING(DATABASE_VERSION) ");";
 
-    ret = sqlite3_exec(db, statement, NULL, NULL, &err_msg);
+    ret = sqlite3_exec(DB, statement, NULL, NULL, &err_msg);
 
     if (ret != SQLITE_OK)
     {
@@ -44,14 +44,14 @@ update_database_version(GError **error)
 
     statement = "SELECT Db_version FROM Version;";
     sqlite3_stmt *stmt;
-    ret = sqlite3_prepare_v2(db, statement, -1, &stmt, NULL);
+    ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
     int db_version;
 
     if (ret != SQLITE_OK)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed preparing SELECT statment: %s", sqlite3_errmsg(db)
+            "Failed preparing SELECT statment: %s", sqlite3_errmsg(DB)
         );
         return FALSE;
     }
@@ -64,7 +64,7 @@ update_database_version(GError **error)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed stepping statment: %s", sqlite3_errmsg(db)
+            "Failed stepping statment: %s", sqlite3_errmsg(DB)
         );
         sqlite3_finalize(stmt);
         return FALSE;
@@ -89,21 +89,22 @@ database_init(GError **error)
     g_assert(error == NULL || *error == NULL);
 
     const char *data_dir = g_get_user_data_dir();
-    store_dir = g_strdup_printf("%s/clippor", data_dir);
+    STORE_DIR = g_strdup_printf("%s/clippor", data_dir);
+    DATA_DIR = g_strdup_printf("%s/data", STORE_DIR);
 
-    if (g_mkdir_with_parents(store_dir, 0755) == -1)
+    if (g_mkdir_with_parents(STORE_DIR, 0755) == -1)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_NO_DATA_DIR,
             "Failed creating database directory: %s", g_strerror(errno)
         );
-        g_free(store_dir);
+        g_free(STORE_DIR);
         return FALSE;
     }
 
-    char *db_path = g_strdup_printf("%s/history.sqlite3", store_dir);
+    char *db_path = g_strdup_printf("%s/history.sqlite3", STORE_DIR);
 
-    int ret = sqlite3_open(db_path, &db);
+    int ret = sqlite3_open(db_path, &DB);
     const char *statement;
     char *err_msg;
 
@@ -113,9 +114,9 @@ database_init(GError **error)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "sqlite3_open() failed: %s", sqlite3_errmsg(db)
+            "sqlite3_open() failed: %s", sqlite3_errmsg(DB)
         );
-        sqlite3_close(db);
+        sqlite3_close(DB);
 
         return FALSE;
     }
@@ -136,7 +137,7 @@ database_init(GError **error)
                 "Data_id char(40) NOT NULL" // Filename of data file
                 ");";
 
-    ret = sqlite3_exec(db, statement, NULL, NULL, &err_msg);
+    ret = sqlite3_exec(DB, statement, NULL, NULL, &err_msg);
 
     if (ret != SQLITE_OK)
     {
@@ -145,14 +146,14 @@ database_init(GError **error)
             "sqlite3_exec() failed: %s", err_msg
         );
         sqlite3_free(err_msg);
-        sqlite3_close(db);
+        sqlite3_close(DB);
 
         return FALSE;
     }
 
     if (!update_database_version(error))
     {
-        sqlite3_close(db);
+        sqlite3_close(DB);
         return FALSE;
     }
 
@@ -162,8 +163,9 @@ database_init(GError **error)
 void
 database_uninit(void)
 {
-    g_free(store_dir);
-    sqlite3_close(db);
+    g_free(STORE_DIR);
+    g_free(DATA_DIR);
+    sqlite3_close(DB);
 }
 
 /*
@@ -182,14 +184,14 @@ database_add_mime_type(
     const char *statement = "INSERT INTO Map VALUES (?, ?, ?);";
     sqlite3_stmt *stmt;
 
-    int ret = sqlite3_prepare_v2(db, statement, -1, &stmt, NULL);
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
 
     if (ret != SQLITE_OK)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
             "Failed preparing INSERT OR REPLACE statement: %s",
-            sqlite3_errmsg(db)
+            sqlite3_errmsg(DB)
         );
         return FALSE;
     }
@@ -204,7 +206,7 @@ database_add_mime_type(
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed stepping statement: %s", sqlite3_errmsg(db)
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
         );
         sqlite3_finalize(stmt);
         return FALSE;
@@ -255,7 +257,7 @@ database_add_entry(ClipporEntry *entry, GError **error)
     g_assert(CLIPPOR_IS_ENTRY(entry));
     g_assert(error == NULL || *error == NULL);
 
-    if (db == NULL)
+    if (DB == NULL)
         return TRUE;
 
     GHashTable *mime_types = clippor_entry_get_mime_types(entry);
@@ -266,13 +268,11 @@ database_add_entry(ClipporEntry *entry, GError **error)
         clippor_clipboard_get_label(clippor_entry_get_clipboard(entry));
 
     // Id is used for the directory name to store all data for this entry
-    g_autofree char *dirpath = g_strdup_printf("%s/data", store_dir);
-
-    if (g_mkdir_with_parents(dirpath, 0755) == -1)
+    if (g_mkdir_with_parents(DATA_DIR, 0755) == -1)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_ADD,
-            "Failed creating directory '%s': %s", dirpath, g_strerror(errno)
+            "Failed creating directory '%s': %s", DATA_DIR, g_strerror(errno)
         );
         return FALSE;
     }
@@ -291,7 +291,7 @@ database_add_entry(ClipporEntry *entry, GError **error)
         GError *error = NULL;
 
         g_autofree char *data_id =
-            database_write_mime_type(dirpath, data, &error);
+            database_write_mime_type(DATA_DIR, data, &error);
 
         if (data_id == NULL)
         {
@@ -327,23 +327,24 @@ database_add_entry(ClipporEntry *entry, GError **error)
 
     sqlite3_stmt *stmt;
 
-    int ret = sqlite3_prepare_v2(db, statement, -1, &stmt, NULL);
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
 
     if (ret != SQLITE_OK)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
             "Failed preparing INSERT OR REPLACE statement: %s",
-            sqlite3_errmsg(db)
+            sqlite3_errmsg(DB)
         );
         return FALSE;
     }
 
+    sqlite3_bind_null(stmt, 1);
     sqlite3_bind_text(stmt, 2, id, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 3, mime_list->str, -1, SQLITE_STATIC);
     sqlite3_bind_int64(stmt, 4, creation_time);
     sqlite3_bind_int64(stmt, 5, last_used_time);
-    sqlite3_bind_int64(stmt, 6, clippor_entry_is_starred(entry));
+    sqlite3_bind_int(stmt, 6, clippor_entry_is_starred(entry));
     sqlite3_bind_text(stmt, 7, cb_label, -1, SQLITE_STATIC);
 
     ret = sqlite3_step(stmt);
@@ -352,7 +353,7 @@ database_add_entry(ClipporEntry *entry, GError **error)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed stepping statement: %s", sqlite3_errmsg(db)
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
         );
         sqlite3_finalize(stmt);
         return FALSE;
@@ -394,13 +395,13 @@ database_deserialize_entry(
 
     sqlite3_stmt *stmt;
 
-    int ret = sqlite3_prepare_v2(db, statement, -1, &stmt, NULL);
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
 
     if (ret != SQLITE_OK)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed preparing SELECT statement: %s", sqlite3_errmsg(db)
+            "Failed preparing SELECT statement: %s", sqlite3_errmsg(DB)
         );
         return FALSE;
     }
@@ -423,7 +424,9 @@ database_deserialize_entry(
         int64_t last_used_time = sqlite3_column_int64(stmt, 3);
         gboolean starred = sqlite3_column_int(stmt, 4);
 
-        ClipporEntry *entry = clippor_entry_new(NULL, creation_time, id, cb);
+        ClipporEntry *entry = clippor_entry_new(
+            NULL, creation_time, id, cb, CLIPPOR_SELECTION_TYPE_NONE
+        );
 
         g_object_set(
             entry, "starred", starred, "last-used-time", last_used_time, NULL
@@ -457,7 +460,7 @@ database_deserialize_entry(
     else
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed stepping statement: %s", sqlite3_errmsg(db)
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
         );
 
     sqlite3_finalize(stmt);
@@ -481,13 +484,13 @@ database_deserialize_mime_type(
                             "WHERE Id = ? AND Mime_type = ?";
     sqlite3_stmt *stmt;
 
-    int ret = sqlite3_prepare_v2(db, statement, -1, &stmt, NULL);
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
 
     if (ret != SQLITE_OK)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed preparing SELECT statement: %s", sqlite3_errmsg(db)
+            "Failed preparing SELECT statement: %s", sqlite3_errmsg(DB)
         );
         return NULL;
     }
@@ -501,7 +504,7 @@ database_deserialize_mime_type(
     {
         const char *data_id = (const char *)sqlite3_column_text(stmt, 0);
         g_autofree char *filepath =
-            g_strdup_printf("%s/data/%s", store_dir, data_id);
+            g_strdup_printf("%s/data/%s", STORE_DIR, data_id);
 
         sqlite3_finalize(stmt);
 
@@ -527,7 +530,7 @@ database_deserialize_mime_type(
     else
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed stepping statement: %s", sqlite3_errmsg(db)
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
         );
 
     sqlite3_finalize(stmt);
@@ -547,13 +550,13 @@ database_get_num_entries(ClipporClipboard *cb, GError **error)
     const char *statement = "SELECT COUNT(*) FROM Main WHERE Clipboard = ?;";
     sqlite3_stmt *stmt;
 
-    int64_t ret = sqlite3_prepare_v2(db, statement, -1, &stmt, NULL);
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
 
     if (ret != SQLITE_OK)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed preparing SELECT statement: %s", sqlite3_errmsg(db)
+            "Failed preparing SELECT statement: %s", sqlite3_errmsg(DB)
         );
         return -1;
     }
@@ -580,7 +583,7 @@ database_get_num_entries(ClipporClipboard *cb, GError **error)
     else
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed stepping statement: %s", sqlite3_errmsg(db)
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
         );
 
     sqlite3_finalize(stmt);
@@ -599,13 +602,13 @@ database_get_entry_index(ClipporEntry *entry, GError **error)
     const char *statement = "SELECT Position FROM Main WHERE Id = ?;";
     sqlite3_stmt *stmt;
 
-    int64_t ret = sqlite3_prepare_v2(db, statement, -1, &stmt, NULL);
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
 
     if (ret != SQLITE_OK)
     {
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed preparing SELECT statement: %s", sqlite3_errmsg(db)
+            "Failed preparing SELECT statement: %s", sqlite3_errmsg(DB)
         );
         return -1;
     }
@@ -631,11 +634,88 @@ database_get_entry_index(ClipporEntry *entry, GError **error)
     else
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
-            "Failed stepping statement: %s", sqlite3_errmsg(db)
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
         );
 
     sqlite3_finalize(stmt);
     return -1;
+}
+
+/*
+ * Remove rows with given id from 'Map' table in database, including the data
+ * files they map to.
+ */
+static gboolean
+database_remove_mime_types(const char *id, GError **error)
+{
+    g_assert(id != NULL);
+    g_assert(error == NULL || *error == NULL);
+
+    const char *statement = "SELECT Data_id FROM Map "
+                            "WHERE Id = ?";
+    sqlite3_stmt *stmt;
+
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
+
+    if (ret != SQLITE_OK)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed preparing SELECT statement: %s", sqlite3_errmsg(DB)
+        );
+        return FALSE;
+    }
+
+    sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
+
+    while ((ret = sqlite3_step(stmt)) == SQLITE_ROW)
+    {
+        const char *data_id = (const char *)sqlite3_column_text(stmt, 0);
+        char *path = g_strdup_printf("%s/%s", DATA_DIR, data_id);
+
+        g_remove(data_id);
+        g_free(path);
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (ret != SQLITE_DONE)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
+        );
+        return FALSE;
+    }
+
+    // Remove rows from table
+    statement = "DELETE FROM Map "
+                "WHERE Id = ?";
+    ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
+
+    if (ret != SQLITE_OK)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed preparing DELETE statement: %s", sqlite3_errmsg(DB)
+        );
+        return FALSE;
+    }
+
+    sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
+    ret = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (ret != SQLITE_DONE && ret != SQLITE_ROW)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
+        );
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 /*
@@ -648,7 +728,96 @@ database_trim_entries(ClipporClipboard *cb, GError **error)
     g_assert(CLIPPOR_IS_CLIPBOARD(cb));
     g_assert(error == NULL || *error == NULL);
 
-    // TODO: implement code!!
+    int64_t max_entries = clippor_clipboard_get_max_entries(cb);
 
+    // TODO: implement code!!
+    const char *statement = "SELECT Id FROM Main "
+                            "WHERE Position NOT IN ("
+                            "SELECT Position FROM Main "
+                            "Where Clipboard = ? "
+                            "ORDER BY Position DESC "
+                            "LIMIT ?"
+                            ");";
+    sqlite3_stmt *stmt;
+
+    int ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
+
+    if (ret != SQLITE_OK)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed preparing SELECT statement: %s", sqlite3_errmsg(DB)
+        );
+        return FALSE;
+    }
+
+    sqlite3_bind_text(
+        stmt, 1, clippor_clipboard_get_label(cb), -1, SQLITE_STATIC
+    );
+    sqlite3_bind_int64(stmt, 2, max_entries - 1);
+
+    while ((ret = sqlite3_step(stmt)) == SQLITE_ROW)
+    {
+        GError *error2 = NULL;
+        const char *id = (const char *)sqlite3_column_text(stmt, 0);
+
+        if (!database_remove_mime_types(id, &error2))
+        {
+            g_assert(error2 != NULL);
+            g_warning(
+                "Failed deleting file while trimming entries: %s",
+                error2->message
+            );
+            g_error_free(error2);
+            continue;
+        }
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (ret != SQLITE_DONE)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
+        );
+        return FALSE;
+    }
+
+    // Remove rows from table
+    statement = "DELETE FROM Main "
+                "WHERE Position NOT IN ("
+                "SELECT Position FROM Main "
+                "Where Clipboard = ? "
+                "ORDER BY Position DESC "
+                "LIMIT ?"
+                ");";
+    ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);
+
+    if (ret != SQLITE_OK)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed preparing DELETE statement: %s", sqlite3_errmsg(DB)
+        );
+        return FALSE;
+    }
+
+    sqlite3_bind_text(
+        stmt, 1, clippor_clipboard_get_label(cb), -1, SQLITE_STATIC
+    );
+    sqlite3_bind_int64(stmt, 2, max_entries - 1);
+
+    ret = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (ret != SQLITE_DONE && ret != SQLITE_ROW)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_SQLITE,
+            "Failed stepping statement: %s", sqlite3_errmsg(DB)
+        );
+        return FALSE;
+    }
     return TRUE;
 }

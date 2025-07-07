@@ -1,5 +1,6 @@
 #pragma once
 
+#include "clippor-clipboard.h"
 #include <gio/gio.h>
 #include <glib-object.h>
 
@@ -7,17 +8,16 @@
 
 G_DECLARE_FINAL_TYPE(ClipporEntry, clippor_entry, CLIPPOR, ENTRY, GObject)
 
-struct _ClipporClipboard;
-typedef struct _ClipporClipboard ClipporClipboard;
-
 ClipporEntry *clippor_entry_new(
-    GObject *from, int64_t creation_time, const char *id,
-    ClipporClipboard *parent
+    ClipporClient *from, int64_t creation_time, const char *id,
+    ClipporClipboard *parent, ClipporSelectionType selection
 );
 
 GHashTable *clippor_entry_get_mime_types(ClipporEntry *self);
 
-GObject *clippor_entry_is_from(ClipporEntry *self);
+ClipporClient *clippor_entry_is_from(ClipporEntry *self);
+
+ClipporSelectionType clippor_entry_get_selection(ClipporEntry *self);
 
 void clippor_entry_add_mime_type(
     ClipporEntry *self, const char *mime_type, GBytes *data

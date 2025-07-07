@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-Bus Object Introspection 1.0//EN" "http://standards.freedesktop.org/dbus/1.0/introspect.dtd">
 <node>
-    <interface name='com.github.clippor'>
+    <interface name='com.github.clippor.clipboard'>
         <method name='GetEntryInfo'>
             <arg name='index' type='x' direction='in'/>
             <arg name='id' type='s' direction='out'/>
@@ -17,6 +17,29 @@
         </method>
         <method name='GetEntriesCount'>
             <arg name='count' type='x' direction='out'/>
+        </method>
+        <method name='RemoveEntry'>
+            <arg name='id' type='s' direction='in'/>
+        </method>
+        <method name='ClearHistory'/>
+        <method name='SetEntryData'>
+            <arg name='id' type='s' direction='in'/>
+            <arg name='mime_type' type ='s' direction='in'/>
+            <arg name='clear' type='b' direction='in'/>
+            <arg name='fd' type='h' direction='out'/>
+        </method>
+        <method name='NewEntry'>
+            <arg name='index' type='x' direction='in'/>
+            <arg name='id' type='s' direction='out'/>
+        </method>
+        <method name='SetEntryStarred'>
+            <arg name='id' type='s' direction='in'/>
+            <arg name='starred' type='b' direction='in'/>
+        </method>
+    </interface>
+    <interface name='com.github.clippor'>
+        <method name='ListClipboards'>
+            <arg name='clipboards' type ='as' direction='out'/>
         </method>
     </interface>
 </node>

@@ -24,6 +24,10 @@ struct _ClipporClipboard
     // object.
     GHashTable *clients;
 
+    // Key being the client object from the clients hash table and value being a
+    // bitmask of which selections are listened to.
+    GHashTable *selections;
+
     int64_t max_entries;
     int64_t max_entries_memory;
     GQueue *entries; // Most recent being at the head of the queue
@@ -135,6 +139,8 @@ clippor_clipboard_finalize(GObject *object)
     g_hash_table_unref(self->mime_type_groups);
 
     g_hash_table_unref(self->clients);
+    g_hash_table_unref(self->selections);
+
     g_queue_free(self->entries);
 
     G_OBJECT_CLASS(clippor_clipboard_parent_class)->finalize(object);
@@ -184,8 +190,10 @@ static void
 clippor_clipboard_init(ClipporClipboard *self)
 {
     self->clients = g_hash_table_new_full(
-        g_direct_hash, g_direct_equal, g_free, callback_client_unref
+        g_str_hash, g_str_equal, g_free, callback_client_unref
     );
+    self->selections = g_hash_table_new(g_direct_hash, g_direct_equal);
+
     self->entries = g_queue_new();
 
     self->allowed_mime_types =
@@ -283,7 +291,7 @@ callback_client_selection(
     ClipporClient *client = CLIPPOR_CLIENT(object);
     ClipporClipboard *cb = data;
 
-    ClipporEntry *entry = clippor_entry_new(object, -1, NULL, cb);
+    ClipporEntry *entry = clippor_entry_new(client, -1, NULL, cb, selection);
 
     // Get mime types & data and add them to the entry
     GPtrArray *mime_types = clippor_client_get_mime_types(client, selection);
@@ -394,11 +402,26 @@ skip:
         ClipporClient *client = g_weak_ref_get(weak_ref);
 
         if (client == NULL)
+        {
             // Client was finalized, remove it
             g_hash_table_iter_remove(&iter);
+            g_hash_table_remove(cb->selections, client);
+        }
 
         // Set the respective entry to the current one
-        clippor_client_set_entry(client, entry, selection, &error);
+        g_assert(g_hash_table_contains(cb->selections, client));
+
+        uint sel_bitmask =
+            (uint64_t)g_hash_table_lookup(cb->selections, client);
+
+        if (sel_bitmask & CLIPPOR_SELECTION_TYPE_REGULAR)
+            clippor_client_set_entry(
+                client, entry, CLIPPOR_SELECTION_TYPE_REGULAR, &error
+            );
+        if (sel_bitmask & CLIPPOR_SELECTION_TYPE_PRIMARY)
+            clippor_client_set_entry(
+                client, entry, CLIPPOR_SELECTION_TYPE_PRIMARY, &error
+            );
     }
 }
 
@@ -412,21 +435,29 @@ clippor_clipboard_add_client(
     g_assert(G_IS_OBJECT(client));
     g_assert(label != NULL);
 
-    GWeakRef *ref = g_new(GWeakRef, 1);
-
-    // If g_object_weak_ref is used, every time the callback is called, we'd
-    // have to loop through all the entries, and destroy the object that
-    // matches. Additionally, we can't use the normal destroy function for the
-    // hash table, we must loop through all the entries.
-    //
-    // Honestly seems more complicated than just removing the entry when we loop
-    // through the haash table on a new selection.
-    g_weak_ref_init(ref, client);
+    uint sel_bitmask = 0;
 
     // Only add if client doesn't already exist in table, if it does then just
     // connect the signal for it.
     if (!g_hash_table_contains(self->clients, label))
+    {
+        GWeakRef *ref = g_new(GWeakRef, 1);
+
+        g_weak_ref_init(ref, client);
         g_hash_table_insert(self->clients, g_strdup(label), ref);
+    }
+    else
+    {
+        g_assert(g_hash_table_contains(self->selections, client));
+        sel_bitmask |= (uint64_t)g_hash_table_lookup(self->selections, client);
+    }
+
+    // Set bitmask
+    sel_bitmask |= selection;
+
+    g_hash_table_insert(
+        self->selections, client, (void *)(uint64_t)sel_bitmask
+    );
 
     // Update client selection
 

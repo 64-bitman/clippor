@@ -19,7 +19,9 @@ struct _ClipporEntry
     int64_t creation_time;  // In microseconds
     int64_t last_used_time; // In microseconds
 
-    GObject *from; // Which client this entry is from, NULL if unknown
+    ClipporClient *from; // Which client this entry is from, NULL if unknown
+    ClipporSelectionType selection; // Which selection this entry is based on,
+                                    // CLIPPOR_SELECTION_TYPE_NONE if unknown
 };
 
 G_DEFINE_TYPE(ClipporEntry, clippor_entry, G_TYPE_OBJECT)
@@ -176,14 +178,15 @@ clippor_entry_init(ClipporEntry *self)
  */
 ClipporEntry *
 clippor_entry_new(
-    GObject *from, int64_t creation_time, const char *id,
-    ClipporClipboard *parent
+    ClipporClient *from, int64_t creation_time, const char *id,
+    ClipporClipboard *parent, ClipporSelectionType selection
 )
 {
     ClipporEntry *entry = g_object_new(CLIPPOR_TYPE_ENTRY, NULL);
 
     entry->from = from;
     entry->cb = parent;
+    entry->selection = selection;
 
     if (creation_time < 0)
         entry->creation_time = entry->last_used_time = g_get_real_time();
@@ -220,12 +223,20 @@ clippor_entry_get_mime_types(ClipporEntry *self)
     return self->mime_types;
 }
 
-GObject *
+ClipporClient *
 clippor_entry_is_from(ClipporEntry *self)
 {
     g_assert(CLIPPOR_IS_ENTRY(self));
 
     return self->from;
+}
+
+ClipporSelectionType
+clippor_entry_get_selection(ClipporEntry *self)
+{
+    g_assert(CLIPPOR_IS_ENTRY(self));
+
+    return self->selection;
 }
 
 /*

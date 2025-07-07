@@ -167,7 +167,8 @@ server_start(void)
         goto fail;
     if (!database_init(&error))
         goto fail;
-    if (!dbus_service_init(&error, CONFIG->dbus_timeout))
+    if (CONFIG->dbus_service &&
+        !dbus_service_init(&error, CONFIG->dbus_timeout))
         goto fail;
 
     CLIPBOARDS = g_ptr_array_new_with_free_func(g_object_unref);
@@ -194,4 +195,10 @@ GMainLoop *
 server_get_main_loop(void)
 {
     return MAIN_LOOP;
+}
+
+const GPtrArray *
+server_get_clipboards(void)
+{
+    return CLIPBOARDS;
 }

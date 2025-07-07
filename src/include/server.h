@@ -5,3 +5,4 @@
 gboolean server_start(void);
 
 GMainLoop *server_get_main_loop(void);
+const GPtrArray *server_get_clipboards(void);
