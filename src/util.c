@@ -89,9 +89,9 @@ poll_data:
                 if (g_poll(&pfd, 1, timeout) > 0)
                     continue;
                 else
-                    g_set_error(
+                    g_set_error_literal(
                         error, UTIL_ERROR, UTIL_ERROR_RECEIVE_DATA,
-                        "g_poll() failed: %s", g_strerror(errno)
+                        "g_poll() failed or timed out"
                     );
                 err = TRUE;
                 break;

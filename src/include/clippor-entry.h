@@ -19,7 +19,7 @@ ClipporClient *clippor_entry_is_from(ClipporEntry *self);
 
 ClipporSelectionType clippor_entry_get_selection(ClipporEntry *self);
 
-void clippor_entry_add_mime_type(
+void clippor_entry_set_mime_type(
     ClipporEntry *self, const char *mime_type, GBytes *data
 );
 gboolean clippor_entry_has_mime_type(ClipporEntry *self, const char *mime_type);

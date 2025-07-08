@@ -23,7 +23,7 @@ GQuark database_error_quark(void);
 gboolean database_init(GError **error);
 void database_uninit(void);
 
-gboolean database_add_entry(ClipporEntry *entry, GError **error);
+gboolean database_set_entry(ClipporEntry *entry, GError **error);
 
 ClipporEntry *database_deserialize_entry(
     ClipporClipboard *cb, int64_t index, const char *id, GError **error

@@ -274,7 +274,7 @@ clippor_clipboard_add_entry(
             return FALSE;
         }
 
-    if (!database_add_entry(entry, error))
+    if (!database_set_entry(entry, error))
     {
         g_prefix_error_literal(error, "Failed adding entry to database: ");
         return FALSE;
@@ -300,6 +300,9 @@ clippor_clipboard_update_clients(
     ClipporClipboard *self, ClipporEntry *entry, gboolean update
 )
 {
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(CLIPPOR_IS_ENTRY(entry));
+
     GHashTableIter iter;
     char *label;
     GWeakRef *weak_ref;
@@ -439,13 +442,13 @@ allowed:;
             {
                 // Add mime types
                 for (uint k = 0; k < group_mimes->len; k++)
-                    clippor_entry_add_mime_type(
+                    clippor_entry_set_mime_type(
                         entry, group_mimes->pdata[k], data
                     );
             }
 skip:
         did_something = TRUE;
-        clippor_entry_add_mime_type(entry, mime_type, data);
+        clippor_entry_set_mime_type(entry, mime_type, data);
         g_bytes_unref(data);
     }
 
@@ -484,6 +487,7 @@ clippor_clipboard_add_client(
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
     g_assert(G_IS_OBJECT(client));
     g_assert(label != NULL);
+    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
 
     uint sel_bitmask = 0;
 
@@ -542,6 +546,8 @@ clippor_clipboard_get_entry(
 )
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(index >= 0);
+    g_assert(error == NULL || *error == NULL);
 
     ClipporEntry *entry;
 
@@ -570,6 +576,14 @@ clippor_clipboard_get_entry(
     return entry;
 }
 
+static int
+clippor_entry_compare_id_func(gconstpointer data, gconstpointer user_data)
+{
+    return g_strcmp0(
+        clippor_entry_get_id(CLIPPOR_ENTRY((ClipporEntry *)data)), user_data
+    );
+}
+
 ClipporEntry *
 clippor_clipboard_get_entry_by_id(
     ClipporClipboard *self, const char *id, GError **error
@@ -577,11 +591,21 @@ clippor_clipboard_get_entry_by_id(
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
     g_assert(id != NULL);
+    g_assert(error == NULL || *error == NULL);
 
-    ClipporEntry *entry = database_deserialize_entry(self, 0, id, error);
+    GList *e =
+        g_queue_find_custom(self->entries, id, clippor_entry_compare_id_func);
+    ClipporEntry *entry = e == NULL ? NULL : e->data;
 
     if (entry == NULL)
-        g_assert(error == NULL || *error != NULL);
+    {
+        entry = database_deserialize_entry(self, 0, id, error);
+
+        if (entry == NULL)
+            g_assert(error == NULL || *error != NULL);
+    }
+    else
+        g_object_ref(entry);
 
     return entry;
 }
@@ -608,14 +632,6 @@ clippor_clipboard_get_max_entries(ClipporClipboard *self)
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
 
     return self->max_entries;
-}
-
-static int
-clippor_entry_compare_id_func(gconstpointer data, gconstpointer user_data)
-{
-    return g_strcmp0(
-        clippor_entry_get_id(CLIPPOR_ENTRY((ClipporEntry *)data)), user_data
-    );
 }
 
 /*

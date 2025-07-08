@@ -243,7 +243,7 @@ clippor_entry_get_selection(ClipporEntry *self)
  * Adds mime type to entry along with its data (can be NULL).
  */
 void
-clippor_entry_add_mime_type(
+clippor_entry_set_mime_type(
     ClipporEntry *self, const char *mime_type, GBytes *data
 )
 {
@@ -253,7 +253,7 @@ clippor_entry_add_mime_type(
     if (data != NULL)
         g_bytes_ref(data);
 
-    g_hash_table_insert(self->mime_types, g_strdup(mime_type), data);
+    g_hash_table_replace(self->mime_types, g_strdup(mime_type), data);
 }
 
 gboolean

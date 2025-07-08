@@ -220,6 +220,7 @@ database_add_mime_type(
 static char *
 database_write_mime_type(const char *store_dir, GBytes *data, GError **error)
 {
+    g_assert(store_dir != NULL);
     g_assert(data != NULL);
     g_assert(error == NULL || *error == NULL);
 
@@ -246,10 +247,11 @@ database_write_mime_type(const char *store_dir, GBytes *data, GError **error)
 }
 
 /*
- * Creates a new entry in the database and writes data to a persistent location
+ * Creates a new entry in the database or replaces an existing one and writes
+ * data to a persistent location
  */
 gboolean
-database_add_entry(ClipporEntry *entry, GError **error)
+database_set_entry(ClipporEntry *entry, GError **error)
 {
     g_assert(CLIPPOR_IS_ENTRY(entry));
     g_assert(error == NULL || *error == NULL);
@@ -413,7 +415,7 @@ database_deserialize_entry(
         gchar **mime_types = g_strsplit(mime_list, ",", -1);
 
         for (char **mime_type = mime_types; *mime_type != NULL; mime_type++)
-            clippor_entry_add_mime_type(entry, *mime_type, NULL);
+            clippor_entry_set_mime_type(entry, *mime_type, NULL);
 
         g_strfreev(mime_types);
 

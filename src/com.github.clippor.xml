@@ -28,9 +28,12 @@
         <method name='ClearHistory'/>
         <method name='SetEntryData'>
             <arg name='id' type='s' direction='in'/>
-            <arg name='mime_type' type ='s' direction='in'/>
-            <arg name='clear' type='b' direction='in'/>
+            <arg name='mime_types' type ='as' direction='in'/>
             <arg name='fd' type='h' direction='out'/>
+        </method>
+        <method name='RemoveEntryData'>
+            <arg name='id' type='s' direction='in'/>
+            <arg name='mime_types' type ='as' direction='in'/>
         </method>
         <method name='NewEntry'>
             <arg name='index' type='x' direction='in'/>

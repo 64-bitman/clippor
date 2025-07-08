@@ -2,6 +2,7 @@
 #include "clippor-clipboard.h"
 #include "com.github.clippor.h"
 #include "database.h"
+#include "glib-unix.h"
 #include "server.h"
 #include "util.h"
 #include <gio-unix-2.0/gio/gunixoutputstream.h>
@@ -304,6 +305,88 @@ clear_history_method_cb(
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
+static gboolean
+set_entry_data_method_cb(
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    const char *id, const char **mime_types, gpointer user_data
+)
+{
+    ClipporClipboard *cb = user_data;
+    GError *error = NULL;
+
+    // Check if entry exists
+    int ret = database_entry_id_exists(id, &error);
+
+    if (ret == -1)
+        DBUS_ERRORE(
+            "FailedCheckingEntry", "Failed checking if entry id exists"
+        );
+    else if (ret == 1)
+        DBUS_ERROR("EntryDoesNotExist", "Entry with id does not exist");
+
+    // Create pipe to receive data from
+    g_auto(GUnixPipe) fds = G_UNIX_PIPE_INIT;
+
+    if (!g_unix_pipe_open(&fds, O_CLOEXEC, &error))
+        DBUS_ERRORE("FailedCreatingPipe", "Failed creating pipe");
+
+    // Create a unix fd list to send the write fd to the client
+    g_autoptr(GUnixFDList) fd_list = g_unix_fd_list_new();
+    int fd_index = g_unix_fd_list_append(
+        fd_list, g_unix_pipe_get(&fds, G_UNIX_PIPE_END_WRITE), &error
+    );
+
+    if (fd_index == -1)
+        DBUS_ERRORE("FailedAppendingFD", "Failed appending FD to list");
+
+    g_dbus_method_invocation_return_value_with_unix_fd_list(
+        invocation, g_variant_new("(h)", fd_index), fd_list
+    );
+
+    // Close so we receive EOF
+    g_unix_pipe_close(&fds, G_UNIX_PIPE_END_WRITE, NULL);
+
+    // Receive data
+    g_autoptr(GBytes) data = util_receive_data(
+        g_unix_pipe_get(&fds, G_UNIX_PIPE_END_READ), TIMEOUT, &error
+    );
+
+    if (data == NULL)
+    {
+        g_message("SetEntryData(): Failed receiving data: %s", error->message);
+        g_error_free(error);
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+    // Update history and database
+    g_autoptr(ClipporEntry) entry =
+        clippor_clipboard_get_entry_by_id(cb, id, &error);
+
+    if (entry == NULL)
+    {
+        g_message(
+            "SetEntryData(): Failed getting entry by id: %s", error->message
+        );
+        g_error_free(error);
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+    /* for (int i = 0; mime_types[i] != NULL; i++) */
+        /* clippor_entry_set_mime_type(entry, mime_types[i], data); */
+
+    if (!database_set_entry(entry, &error))
+    {
+        g_message(
+            "SetEntryData(): Failed writing entry to database: %s",
+            error->message
+        );
+        g_error_free(error);
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
 void
 dbus_service_add_clipboard(ClipporClipboard *cb)
 {
@@ -344,6 +427,9 @@ dbus_service_add_clipboard(ClipporClipboard *cb)
     );
     g_signal_connect(
         iface, "handle-clear-history", G_CALLBACK(clear_history_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-set-entry-data", G_CALLBACK(set_entry_data_method_cb), cb
     );
 
     g_dbus_object_manager_server_export(

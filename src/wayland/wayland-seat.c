@@ -1,5 +1,6 @@
 #include "wayland-seat.h"
 #include "clippor-entry.h"
+#include "glib-unix.h"
 #include "util.h"
 #include "wayland-connection.h"
 #include <fcntl.h>
@@ -625,26 +626,25 @@ wayland_seat_client_get_data(
     if (sel->offer == NULL)
         return NULL;
 
-    int fds[2];
+    GUnixPipe fds = G_UNIX_PIPE_INIT;
 
-    if (pipe(fds) == -1)
-    {
-        g_set_error(
-            error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_RECEIVE,
-            "pipe() failed: %s", g_strerror(errno)
-        );
+    if (!g_unix_pipe_open(&fds, O_CLOEXEC, error))
         return NULL;
-    }
 
-    wayland_data_offer_receive(sel->offer, mime_type, fds[1]);
+    wayland_data_offer_receive(
+        sel->offer, mime_type, g_unix_pipe_get(&fds, G_UNIX_PIPE_END_WRITE)
+    );
 
     // Close our write end of the pipe so that we receive EOF.
-    close(fds[1]);
+    g_unix_pipe_close(&fds, G_UNIX_PIPE_END_WRITE, NULL);
 
     if (wayland_connection_flush(seat->ct, error))
-        data = util_receive_data(fds[0], seat->data_timeout, error);
+        data = util_receive_data(
+            g_unix_pipe_get(&fds, G_UNIX_PIPE_END_READ), seat->data_timeout,
+            error
+        );
 
-    close(fds[0]);
+    g_unix_pipe_close(&fds, G_UNIX_PIPE_END_READ, NULL);
 
     return data;
 }
