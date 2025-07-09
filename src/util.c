@@ -6,15 +6,25 @@
 
 G_DEFINE_QUARK(util_error_quark, util_error)
 
+// Represents the data of a mime type, including its checksum
+struct _ClipporData
+{
+    GByteArray *byte_array; // If NULL then data has been finished, cannot
+                            // modify anymore.
+    GBytes *bytes;
+    GChecksum *checksum; // NULL if not computing checksum
+    int ref_count;
+};
+
 gboolean
-util_send_data(int32_t fd, GBytes *data, int timeout, GError **error)
+util_send_data(int32_t fd, ClipporData *data, int timeout, GError **error)
 {
     g_assert(data != NULL);
     g_assert(fd >= 0);
     g_assert(error == NULL || *error == NULL);
 
     size_t length;
-    const char *stuff = g_bytes_get_data(data, &length);
+    const char *stuff = clippor_data_get_data(data, &length);
 
     GPollFD pfd = {.fd = fd, .events = G_IO_OUT};
     ssize_t written = 0;
@@ -47,13 +57,13 @@ util_send_data(int32_t fd, GBytes *data, int timeout, GError **error)
     return TRUE;
 }
 
-GBytes *
-util_receive_data(int32_t fd, int timeout, GError **error)
+ClipporData *
+util_receive_data(int32_t fd, int timeout, gboolean checksum, GError **error)
 {
     g_assert(error == NULL || *error == NULL);
     g_assert(fd >= 0);
 
-    GByteArray *data = g_byte_array_new();
+    ClipporData *data = clippor_data_new(checksum);
     GPollFD pfd = {.fd = fd, .events = G_IO_IN};
 
     // Make pipe (read end) non-blocking
@@ -63,11 +73,11 @@ util_receive_data(int32_t fd, int timeout, GError **error)
             error, UTIL_ERROR, UTIL_ERROR_RECEIVE_DATA, "fcntl() failed: %s",
             g_strerror(errno)
         );
-        g_byte_array_unref(data);
+        clippor_data_unref(data);
         return NULL;
     }
 
-    uint8_t *bytes = g_malloc(8192);
+    uint8_t *bytes = g_malloc(4096);
     ssize_t r = 0;
     gboolean err = FALSE;
 
@@ -77,7 +87,7 @@ util_receive_data(int32_t fd, int timeout, GError **error)
 
     while (errno = 0, TRUE)
     {
-        r = read(fd, bytes, 8192);
+        r = read(fd, bytes, 4096);
 
         if (r == 0)
             break;
@@ -103,17 +113,18 @@ poll_data:
             err = TRUE;
             break;
         }
-        g_byte_array_append(data, bytes, r);
+        clippor_data_append(data, bytes, r);
     }
     g_free(bytes);
 
     if (err)
     {
-        g_byte_array_unref(data);
+        clippor_data_unref(data);
         return NULL;
     }
 
-    return g_byte_array_free_to_bytes(data);
+    clippor_data_finish(data);
+    return data;
 }
 
 /*
@@ -135,4 +146,95 @@ util_expand_env(const char *name)
         return g_strdup(name);
 
     return g_strdup(val);
+}
+
+ClipporData *
+clippor_data_new(gboolean do_checksum)
+{
+    ClipporData *data = g_new0(ClipporData, 1);
+
+    data->byte_array = g_byte_array_new();
+    data->ref_count = 1;
+
+    if (do_checksum)
+        data->checksum = g_checksum_new(G_CHECKSUM_SHA1);
+
+    return data;
+}
+
+ClipporData *
+clippor_data_new_take(gpointer data, size_t size, gboolean do_checksum)
+{
+    ClipporData *new = clippor_data_new(do_checksum);
+
+    clippor_data_append(new, data, size);
+    return clippor_data_finish(new);
+}
+
+void
+clippor_data_unref(ClipporData *self)
+{
+    if (self == NULL)
+        return;
+
+    self->ref_count--;
+
+    if (self->ref_count <= 0)
+    {
+        if (self->byte_array != NULL)
+            g_byte_array_unref(self->byte_array);
+        if (self->bytes != NULL)
+            g_bytes_unref(self->bytes);
+        if (self->checksum != NULL)
+            g_checksum_free(self->checksum);
+        g_free(self);
+    }
+}
+
+ClipporData *
+clippor_data_ref(ClipporData *self)
+{
+    g_assert(self != NULL);
+    self->ref_count++;
+    return self;
+}
+
+void
+clippor_data_append(ClipporData *self, const uint8_t *bytes, uint size)
+{
+    g_assert(self != NULL);
+    g_assert(bytes != NULL);
+
+    g_byte_array_append(self->byte_array, bytes, size);
+
+    if (self->checksum != NULL)
+        g_checksum_update(self->checksum, bytes, size);
+}
+
+ClipporData *
+clippor_data_finish(ClipporData *self)
+{
+    g_assert(self != NULL);
+
+    self->bytes = g_byte_array_free_to_bytes(self->byte_array);
+    self->byte_array = NULL;
+
+    return self;
+}
+
+gconstpointer
+clippor_data_get_data(ClipporData *self, size_t *size)
+{
+    g_assert(self != NULL);
+    g_assert(self->bytes != NULL);
+    return g_bytes_get_data(self->bytes, size);
+}
+
+const char *
+clippor_data_get_checksum(ClipporData *self)
+{
+    g_assert(self != NULL);
+    g_assert(self->checksum != NULL);
+
+    return g_checksum_get_string(self->checksum);
 }

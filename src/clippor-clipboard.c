@@ -166,12 +166,12 @@ clippor_clipboard_class_init(ClipporClipboardClass *class)
     );
     obj_properties[PROP_MAX_ENTRIES] = g_param_spec_int64(
         "max-entries", "Max entries",
-        "Maximum amount of entries stored persistently", 0, G_MAXINT64, 100,
+        "Maximum amount of entries stored persistently", 1, G_MAXINT64, 100,
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
     obj_properties[PROP_MAX_ENTRIES_MEMORY] = g_param_spec_int64(
         "max-entries-memory", "Max entries in memory",
-        "Maximum amount of entries stored in memory", 0, G_MAXINT64, 10,
+        "Maximum amount of entries stored in memory", 1, G_MAXINT64, 10,
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
     obj_properties[PROP_ALLOWED_MIME_TYPES] = g_param_spec_boxed(
@@ -221,7 +221,7 @@ clippor_clipboard_new(const char *label)
 
     for (int64_t i = 0; i < cb->max_entries; i++)
     {
-        entry = database_deserialize_entry(cb, i, NULL, &error);
+        entry = database_get_entry_by_position(cb, i, &error);
 
         if (entry == NULL)
         {
@@ -230,7 +230,7 @@ clippor_clipboard_new(const char *label)
             {
                 // Dont message an error if database is just empty
                 if (error->code != DATABASE_ERROR_ROW_NONEXISTENT)
-                    g_message(
+                    g_warning(
                         "Failed loading entry for clipboard '%s': %s",
                         cb->label, error->message
                     );
@@ -256,52 +256,30 @@ callback_client_unref(gpointer weak_ref)
     g_free(weak_ref);
 }
 
-gboolean
-clippor_clipboard_add_entry(
-    ClipporClipboard *self, ClipporEntry *entry, GError **error
-)
+void
+clippor_clipboard_add_entry(ClipporClipboard *self, ClipporEntry *entry)
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
     g_assert(CLIPPOR_IS_ENTRY(entry));
-    g_assert(error == NULL || *error == NULL);
 
-    if (self->max_entries > 0)
-        if (!database_trim_entries(self, FALSE, error))
-        {
-            g_prefix_error_literal(
-                error, "Failed trimming entries in database: "
-            );
-            return FALSE;
-        }
-
-    if (!database_set_entry(entry, error))
-    {
-        g_prefix_error_literal(error, "Failed adding entry to database: ");
-        return FALSE;
-    }
-
-    // If max_entries_memory is 0 then have indefinite number of entries.
-    if (self->max_entries_memory > 0)
-        // Shove out excess old entries until there is one spot available
-        while (self->entries->length >= self->max_entries_memory)
-            g_object_unref(g_queue_pop_tail(self->entries));
+    // Shove out excess old entries until there is one spot available
+    while (self->entries->length >= self->max_entries_memory)
+        g_object_unref(g_queue_pop_tail(self->entries));
 
     g_queue_push_head(self->entries, entry);
-
-    return TRUE;
 }
 
 /*
  * Update client selections. If "update" is TRUE, then only set entry if
  * clients check that the entry that are referencing has been removed.
  */
-static void
+void
 clippor_clipboard_update_clients(
     ClipporClipboard *self, ClipporEntry *entry, gboolean update
 )
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
-    g_assert(CLIPPOR_IS_ENTRY(entry));
+    g_assert(entry == NULL || CLIPPOR_IS_ENTRY(entry));
 
     GHashTableIter iter;
     char *label;
@@ -337,7 +315,7 @@ clippor_clipboard_update_clients(
 
         if (!ret)
         {
-            g_message(
+            g_warning(
                 "Failed setting/updating entry for regular selection of client "
                 "'%s': %s",
                 label, error->message
@@ -352,7 +330,7 @@ clippor_clipboard_update_clients(
 
         if (!ret)
         {
-            g_message(
+            g_warning(
                 "Failed setting/updating entry for primary selection of client "
                 "'%s': %s",
                 label, error->message
@@ -374,11 +352,19 @@ callback_client_selection(
     ClipporClient *client = CLIPPOR_CLIENT(object);
     ClipporClipboard *cb = data;
 
-    ClipporEntry *entry = clippor_entry_new(client, -1, NULL, cb, selection);
+    GError *error = NULL;
+    ClipporEntry *entry =
+        clippor_entry_new(client, -1, NULL, cb, selection, &error);
+
+    if (entry == NULL)
+    {
+        g_warning("Failed creating entry: %s", error->message);
+        g_error_free(error);
+        return;
+    }
 
     // Get mime types & data and add them to the entry
     GPtrArray *mime_types = clippor_client_get_mime_types(client, selection);
-    GError *error = NULL;
     gboolean did_something = FALSE; // If we added a mime type to the entry
 
     // Abort on any error
@@ -405,19 +391,19 @@ callback_client_selection(
         continue;
 
 allowed:;
-        GBytes *data =
+        ClipporData *data =
             clippor_client_get_data(client, mime_type, selection, &error);
 
         if (data == NULL)
         {
             g_assert(error != NULL);
 
-            g_message(
+            g_warning(
                 "Failed receiving data from client for clipboard '%s': %s",
                 cb->label, error->message
             );
 
-            g_error_free(error);
+            g_clear_error(&error);
             g_object_unref(entry);
             g_ptr_array_unref(mime_types);
             return;
@@ -442,14 +428,31 @@ allowed:;
             {
                 // Add mime types
                 for (uint k = 0; k < group_mimes->len; k++)
-                    clippor_entry_set_mime_type(
-                        entry, group_mimes->pdata[k], data
-                    );
+                    if (!clippor_entry_set_mime_type(
+                            entry, group_mimes->pdata[k], data, &error
+                        ))
+                    {
+                        g_warning(
+                            "Failed setting mime type '%s' for entry from "
+                            "clipboard '%s': %s",
+                            mime_type, cb->label, error->message
+                        );
+                        g_clear_error(&error);
+                    }
             }
 skip:
+        if (!clippor_entry_set_mime_type(entry, mime_type, data, &error))
+        {
+            g_warning(
+                "Failed setting mime type '%s' for entry from "
+                "clipboard '%s': %s",
+                mime_type, cb->label, error->message
+            );
+            g_clear_error(&error);
+        }
+
         did_something = TRUE;
-        clippor_entry_set_mime_type(entry, mime_type, data);
-        g_bytes_unref(data);
+        clippor_data_unref(data);
     }
 
     g_ptr_array_unref(mime_types);
@@ -461,21 +464,25 @@ skip:
         return;
     }
 
-    if (!clippor_clipboard_add_entry(cb, entry, &error))
+    if (!database_trim_entry_rows(cb, FALSE, &error))
     {
         g_assert(error != NULL);
-        g_message(
-            "Failed adding entry for clipboard '%s': %s", cb->label,
-            error->message
-        );
+        g_warning("Selection signal failed: %s", error->message);
         g_object_unref(entry);
         g_error_free(error);
         return;
     }
 
+    clippor_clipboard_add_entry(cb, entry);
+
     // Update clients (includes the source client too, because we need to keep
     // their current entry up to date)
     clippor_clipboard_update_clients(cb, entry, FALSE);
+
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+        g_debug("Clipboard '%s': Regular selection event", cb->label);
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+        g_debug("Clipboard '%s': Primary selection event", cb->label);
 }
 
 void
@@ -551,10 +558,9 @@ clippor_clipboard_get_entry(
 
     ClipporEntry *entry;
 
-    // If index is outside the in memory list, search the database. Unless
-    // max_entries_memory is 0 then all entries are stored in memory.
-    if (self->max_entries_memory > 0 && index > self->max_entries_memory)
-        entry = database_deserialize_entry(self, index, NULL, error);
+    // If index is outside the in memory list, search the database.
+    if (index > self->max_entries_memory)
+        entry = database_get_entry_by_position(self, index, error);
     else
     {
         entry = g_queue_peek_nth(self->entries, index);
@@ -599,7 +605,7 @@ clippor_clipboard_get_entry_by_id(
 
     if (entry == NULL)
     {
-        entry = database_deserialize_entry(self, 0, id, error);
+        entry = database_get_entry_by_id(self, id, error);
 
         if (entry == NULL)
             g_assert(error == NULL || *error != NULL);
@@ -658,7 +664,7 @@ clippor_clipboard_remove_entry(
     }
 
     // Remove entry from database
-    if (!database_remove_id(id, error))
+    if (!database_remove_entry_row_by_id(id, error))
     {
         g_prefix_error(
             error, "Failed removing entry from clipboard '%s': ", self->label
@@ -683,7 +689,7 @@ clippor_clipboard_clear_history(ClipporClipboard *self, GError **error)
 
     g_queue_clear_full(self->entries, g_object_unref);
 
-    if (!database_trim_entries(self, TRUE, error))
+    if (!database_trim_entry_rows(self, TRUE, error))
     {
         g_prefix_error(
             error, "Failed clearing database for clipboard '%s': ", self->label

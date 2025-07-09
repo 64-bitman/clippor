@@ -1,6 +1,7 @@
 #pragma once
 
 #include "clippor-clipboard.h"
+#include "util.h"
 #include <glib-object.h>
 #include <glib.h>
 
@@ -31,7 +32,7 @@ struct _ClipporClientClass
     GPtrArray *(*get_mime_types)(
         ClipporClient *self, ClipporSelectionType selection
     );
-    GBytes *(*get_data)(
+    ClipporData *(*get_data)(
         ClipporClient *self, const char *mime_type,
         ClipporSelectionType selection, GError **error
     );
@@ -44,7 +45,7 @@ struct _ClipporClientClass
 GPtrArray *clippor_client_get_mime_types(
     ClipporClient *self, ClipporSelectionType selection
 );
-GBytes *clippor_client_get_data(
+ClipporData *clippor_client_get_data(
     ClipporClient *self, const char *mime_type, ClipporSelectionType selection,
     GError **error
 );

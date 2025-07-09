@@ -221,9 +221,8 @@ wayland_connection_class_init(WaylandConnectionClass *class)
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
     obj_properties[PROP_DATA_TIMEOUT] = g_param_spec_int(
-        "data-timeout", "Data timeout",
-        "Timeout to use when transferring data", -1,
-        G_MAXINT, 500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
+        "data-timeout", "Data timeout", "Timeout to use when transferring data",
+        -1, G_MAXINT, 500, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
     );
     obj_properties[PROP_CONNECTION_TIMEOUT] = g_param_spec_int(
         "connection-timeout", "Connection timeout",
@@ -387,7 +386,12 @@ wl_registry_listener_global(
         if (obj == NULL)
         {
             g_assert(error != NULL);
-            wl_seat_destroy(seat);
+
+            g_warning("Failed creating Wayland seat: %s", error->message);
+            g_error_free(error);
+
+            // No need to call wl_seat_destroy, finalize function in obj will do
+            // that for us.
             return;
         }
         g_hash_table_insert(
@@ -733,7 +737,7 @@ wayland_connection_source_prepare(GSource *source, int *timeout_)
     if (!wayland_connection_flush(ct, &error))
     {
         g_assert(error != NULL);
-        g_message("Failed prepare: %s", error->message);
+        g_warning("Failed prepare: %s", error->message);
         g_error_free(error);
     }
 
@@ -763,7 +767,7 @@ wayland_connection_source_check(GSource *source)
     {
         if (wl_display_read_events(display) == -1)
         {
-            g_message(
+            g_warning(
                 "Failed reading events on Wayland display '%s'",
                 wayland_connection_get_display_name(ct)
             );
@@ -803,7 +807,7 @@ wayland_connection_source_dispatch(
 
     if (wl_display_dispatch_pending(display) == -1)
     {
-        g_message(
+        g_warning(
             "Failed dispatching events for Wayland display '%s'",
             wayland_connection_get_display_name(ct)
         );
@@ -1399,5 +1403,6 @@ WAYLAND_DATA_PROXY_ADD_LISTENER(offer, WaylandDataOffer)
 GPtrArray *
 wayland_data_offer_get_mime_types(WaylandDataOffer *offer)
 {
+    g_assert(wayland_data_offer_is_valid(offer));
     return offer->mime_types;
 }

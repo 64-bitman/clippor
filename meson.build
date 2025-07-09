@@ -9,8 +9,9 @@ project('clippor', 'c',
 if get_option('buildtype').startswith('debug')
   add_project_arguments('-DDEBUG',
     # '-pg',
+    # '-no-pie',
     language : 'c')
-  # add_project_link_arguments('-pg', language: 'c')
+  # add_project_link_arguments(['-pg', '-no-pie'], language: 'c')
 endif
 
 add_project_arguments(

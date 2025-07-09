@@ -36,7 +36,6 @@
             <arg name='mime_types' type ='as' direction='in'/>
         </method>
         <method name='NewEntry'>
-            <arg name='index' type='x' direction='in'/>
             <arg name='id' type='s' direction='out'/>
         </method>
         <method name='SetEntryStarred'>

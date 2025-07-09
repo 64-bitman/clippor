@@ -34,8 +34,10 @@ GType clippor_selection_type_get_type(void);
 
 ClipporClipboard *clippor_clipboard_new(const char *label);
 
-gboolean clippor_clipboard_add_entry(
-    ClipporClipboard *self, ClipporEntry *entry, GError **error
+void clippor_clipboard_add_entry(ClipporClipboard *self, ClipporEntry *entry);
+
+void clippor_clipboard_update_clients(
+    ClipporClipboard *self, ClipporEntry *entry, gboolean update
 );
 
 void clippor_clipboard_add_client(

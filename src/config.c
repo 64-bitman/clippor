@@ -113,11 +113,15 @@ config_populate(Config *config, const char *config_file, GError **error)
 
         ConfigClipboard config_cb;
 
-        config_cb.name = g_strdup(clipboard_name.u.str.ptr);
-
         TOML_SET(max_entries, u.int64, config_cb.max_entries, 100);
         TOML_SET(max_entries_memory, u.int64, config_cb.max_entries_memory, 10);
 
+        if (config_cb.max_entries <= 0)
+            TOML_ERROR("'max_entries' must be greater than zero");
+        if (config_cb.max_entries_memory <= 0)
+            TOML_ERROR("'max_entries_memory' must be greater than zero");
+
+        config_cb.name = g_strdup(clipboard_name.u.str.ptr);
         config_cb.allowed_mime_types =
             g_ptr_array_new_with_free_func((void (*)(void *))g_regex_unref);
 

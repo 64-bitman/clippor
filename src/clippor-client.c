@@ -59,7 +59,7 @@ clippor_client_get_mime_types(
  * Returns data for given mime type for the current selection. Returns NULL on
  * error or if there is no selection.
  */
-GBytes *
+ClipporData *
 clippor_client_get_data(
     ClipporClient *self, const char *mime_type, ClipporSelectionType selection,
     GError **error
@@ -94,22 +94,16 @@ clippor_client_set_entry(
 
     ClipporClientClass *class = CLIPPOR_CLIENT_GET_CLASS(self);
 
-    //  Don't want to immediately steal the selection when there is a new one
-    //  (Only if selection is the same).
-    if (entry != NULL && clippor_entry_get_selection(entry) == selection)
-        if (clippor_entry_is_from(entry) == self)
-            return TRUE;
+    /* if (entry != NULL) */
+    /* { */
+    /*     GHashTableIter iter; */
 
-    if (entry != NULL)
-    {
-        GHashTableIter iter;
+    /*     g_hash_table_iter_init(&iter, clippor_entry_get_mime_types(entry)); */
 
-        g_hash_table_iter_init(&iter, clippor_entry_get_mime_types(entry));
-
-        // No point in setting selection if there are no mime types in entry
-        if (!g_hash_table_iter_next(&iter, NULL, NULL))
-            return TRUE;
-    }
+    /*     // No point in setting selection if there are no mime types in entry */
+    /*     if (!update && !g_hash_table_iter_next(&iter, NULL, NULL)) */
+    /*         return TRUE; */
+    /* } */
 
     return class->set_entry == NULL
                ? FALSE

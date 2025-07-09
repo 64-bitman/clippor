@@ -13,6 +13,7 @@ typedef enum
     WAYLAND_SEAT_ERROR_RECEIVE,
     WAYLAND_SEAT_ERROR_SEND,
     WAYLAND_SEAT_ERROR_SET,
+    WAYLAND_SEAT_ERROR_NO_DATA_PROTOCOL
 } WaylandSeatError;
 
 GQuark wayland_seat_error_quark(void);

@@ -86,7 +86,7 @@ static gboolean wayland_seat_update_selection(
 static GPtrArray *wayland_seat_client_get_mime_types(
     ClipporClient *self, ClipporSelectionType selection
 );
-static GBytes *wayland_seat_client_get_data(
+static ClipporData *wayland_seat_client_get_data(
     ClipporClient *self, const char *mime_type, ClipporSelectionType selection,
     GError **error
 );
@@ -230,7 +230,7 @@ wayland_seat_new(
         !wayland_seat_clipboard_setup(seat, error))
     {
         g_assert(error != NULL);
-        g_prefix_error_literal(error, "Wayland seat failed: ");
+        g_prefix_error_literal(error, "Wayland seat setup failed: ");
         g_object_unref(seat);
         return NULL;
     }
@@ -352,6 +352,16 @@ wayland_seat_clipboard_setup(WaylandSeat *self, GError **error)
 
     self->clipboard.manager =
         wayland_connection_get_data_device_manager(self->ct);
+
+    if (self->clipboard.manager == NULL)
+    {
+        g_set_error(
+            error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_NO_DATA_PROTOCOL,
+            "No data control protocol available"
+        );
+        return FALSE;
+    }
+
     self->clipboard.device = wayland_data_device_manager_get_data_device(
         self->clipboard.manager, self
     );
@@ -422,7 +432,7 @@ wayland_data_device_listener_selection(
         // no entry then nothing is done.
         if (!wayland_seat_update_selection(seat, selection, TRUE, &error))
         {
-            g_message(
+            g_warning(
                 "Failed updating selection for Wayland seat '%s': %s",
                 seat->name, error->message
             );
@@ -484,13 +494,13 @@ data_source_event_send(
     WaylandSeatSelection *sel = data;
     ClipporEntry *entry = g_weak_ref_get(&sel->entry);
 
-    GBytes *stuff = clippor_entry_get_data(entry, mime_type, &error);
+    ClipporData *stuff = clippor_entry_get_data(entry, mime_type, &error);
 
     if (stuff == NULL)
     {
         if (error != NULL)
         {
-            g_message(
+            g_warning(
                 "Data source send event failed, cannot get '%s' data: %s",
                 mime_type, error->message
             );
@@ -498,7 +508,7 @@ data_source_event_send(
         }
         else
             // No entry for mime type exists in database
-            g_message(
+            g_warning(
                 "No entry exists for '%s' in database for entry id '%s'",
                 mime_type, clippor_entry_get_id(entry)
             );
@@ -509,12 +519,12 @@ data_source_event_send(
     if (!util_send_data(fd, stuff, sel->parent->data_timeout, &error))
     {
         g_assert(error != NULL);
-        g_message("Data source send event failed: %s", error->message);
+        g_warning("Data source send event failed: %s", error->message);
         g_error_free(error);
     }
 
 exit:
-    g_bytes_unref(stuff);
+    clippor_data_unref(stuff);
     g_object_unref(entry);
 
     close(fd);
@@ -611,7 +621,7 @@ wayland_seat_client_get_mime_types(
     return wayland_data_offer_get_mime_types(sel->offer);
 }
 
-static GBytes *
+static ClipporData *
 wayland_seat_client_get_data(
     ClipporClient *self, const char *mime_type, ClipporSelectionType selection,
     GError **error
@@ -621,7 +631,7 @@ wayland_seat_client_get_data(
 
     WaylandSeat *seat = WAYLAND_SEAT(self);
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
-    GBytes *data = NULL;
+    ClipporData *data = NULL;
 
     if (sel->offer == NULL)
         return NULL;
@@ -641,7 +651,7 @@ wayland_seat_client_get_data(
     if (wayland_connection_flush(seat->ct, error))
         data = util_receive_data(
             g_unix_pipe_get(&fds, G_UNIX_PIPE_END_READ), seat->data_timeout,
-            error
+            TRUE, error
         );
 
     g_unix_pipe_close(&fds, G_UNIX_PIPE_END_READ, NULL);
@@ -663,6 +673,15 @@ wayland_seat_client_set_entry(
 
     if ((update && entry_ref == NULL) || !update)
         g_weak_ref_set(&sel->entry, entry);
+
+    if (entry_ref != NULL)
+        g_object_unref(entry_ref);
+
+    //  Don't want to immediately steal the selection when there is a new one
+    //  (Only if selection is the same).
+    if (entry != NULL && clippor_entry_get_selection(entry) == selection)
+        if (clippor_entry_is_from(entry) == self)
+            return TRUE;
 
     if (!wayland_seat_update_selection(seat, sel->type, FALSE, error))
     {

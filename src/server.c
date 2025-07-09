@@ -19,7 +19,7 @@ static Config *CONFIG;
 static void
 exit_handler(void)
 {
-    g_message("Exiting...");
+    g_info("Exiting...");
 
     g_main_loop_quit(MAIN_LOOP);
     g_main_loop_unref(MAIN_LOOP);
@@ -110,7 +110,7 @@ server_set_config(void)
 
         if (ct == NULL)
         {
-            g_message("%s", error->message);
+            g_warning("%s", error->message);
             g_error_free(error);
         }
 
@@ -185,7 +185,7 @@ server_start(void)
 fail:
     g_assert(error != NULL);
 
-    g_message("Failed starting server: %s", error->message);
+    g_warning("Failed starting server: %s", error->message);
     g_error_free(error);
 
     return FALSE;

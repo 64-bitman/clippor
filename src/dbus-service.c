@@ -42,10 +42,10 @@ name_lost_cb(
 {
     if (connection == NULL)
         // Failed connecting to bus
-        g_message("Failed connecting to session bus");
+        g_warning("Failed connecting to session bus");
     else
         // Name cannot be obtained
-        g_message("Failed obtaining name on session bus");
+        g_warning("Failed obtaining name on session bus");
 
     g_main_loop_quit(server_get_main_loop());
 }
@@ -212,17 +212,22 @@ get_mime_type_data_method_cb(
     if (entry == NULL)
         DBUS_ERRORE("FailedGettingEntry", "Failed getting entry");
 
-    GBytes *data = clippor_entry_get_data(entry, mime_type, &error);
+    ClipporData *data = clippor_entry_get_data(entry, mime_type, &error);
 
     if (data == NULL)
-        DBUS_ERRORE(
-            "FailedGettingMimeTypeData", "Failed getting data for mime type"
-        );
+    {
+        if (error != NULL)
+            DBUS_ERRORE(
+                "FailedGettingMimeTypeData", "Failed getting data for mime type"
+            );
+        else
+            DBUS_ERROR("NoMimeTypeData", "No data associated with mime type");
+    }
 
     if (!util_send_data(fd, data, TIMEOUT, &error))
         DBUS_ERRORE("FailedSendingData", "Failed sending data");
 
-    g_bytes_unref(data);
+    clippor_data_unref(data);
     g_object_unref(entry);
 
     bus_clippor_clipboard_complete_get_mime_type_data(object, invocation);
@@ -307,8 +312,9 @@ clear_history_method_cb(
 
 static gboolean
 set_entry_data_method_cb(
-    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
-    const char *id, const char **mime_types, gpointer user_data
+    BusClipporClipboard *object G_GNUC_UNUSED,
+    GDBusMethodInvocation *invocation, const char *id, const char **mime_types,
+    gpointer user_data
 )
 {
     ClipporClipboard *cb = user_data;
@@ -347,13 +353,13 @@ set_entry_data_method_cb(
     g_unix_pipe_close(&fds, G_UNIX_PIPE_END_WRITE, NULL);
 
     // Receive data
-    g_autoptr(GBytes) data = util_receive_data(
-        g_unix_pipe_get(&fds, G_UNIX_PIPE_END_READ), TIMEOUT, &error
+    g_autoptr(ClipporData) data = util_receive_data(
+        g_unix_pipe_get(&fds, G_UNIX_PIPE_END_READ), TIMEOUT, TRUE, &error
     );
 
     if (data == NULL)
     {
-        g_message("SetEntryData(): Failed receiving data: %s", error->message);
+        g_warning("SetEntryData(): Failed receiving data: %s", error->message);
         g_error_free(error);
         return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
@@ -364,25 +370,62 @@ set_entry_data_method_cb(
 
     if (entry == NULL)
     {
-        g_message(
+        g_warning(
             "SetEntryData(): Failed getting entry by id: %s", error->message
         );
         g_error_free(error);
         return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
-    /* for (int i = 0; mime_types[i] != NULL; i++) */
-        /* clippor_entry_set_mime_type(entry, mime_types[i], data); */
+    for (int i = 0; mime_types[i] != NULL; i++)
+        if (!clippor_entry_set_mime_type(entry, mime_types[i], data, &error))
+        {
+            g_warning(
+                "SetEntryData(): Failed setting mime_type_data: %s",
+                error->message
+            );
+            g_clear_error(&error);
+        }
 
-    if (!database_set_entry(entry, &error))
-    {
-        g_message(
-            "SetEntryData(): Failed writing entry to database: %s",
-            error->message
-        );
-        g_error_free(error);
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-    }
+    clippor_clipboard_update_clients(cb, entry, FALSE);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+remove_entry_data_method_cb(
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    const char *id, const char **mime_types, gpointer user_data
+)
+{
+    ClipporClipboard *cb = user_data;
+    GError *error = NULL;
+
+    g_autoptr(ClipporEntry) entry =
+        clippor_clipboard_get_entry_by_id(cb, id, &error);
+
+    if (entry == NULL)
+        DBUS_ERRORE("FailedGettingEntry", "Failed getting entry by id");
+
+    for (int i = 0; mime_types[i] != NULL; i++)
+        if (!clippor_entry_set_mime_type(entry, mime_types[i], NULL, &error))
+            DBUS_ERRORE(
+                "FailedSettingMimeTypeData", "Failed settings mime type data"
+            );
+
+    clippor_clipboard_update_clients(cb, entry, FALSE);
+
+    bus_clippor_clipboard_complete_remove_entry_data(object, invocation);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+new_entry_method_cb(
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation
+)
+{
+    bus_clippor_clipboard_complete_new_entry(object, invocation, NULL);
 
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
@@ -430,6 +473,13 @@ dbus_service_add_clipboard(ClipporClipboard *cb)
     );
     g_signal_connect(
         iface, "handle-set-entry-data", G_CALLBACK(set_entry_data_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-remove-entry-data",
+        G_CALLBACK(remove_entry_data_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-new-entry", G_CALLBACK(new_entry_method_cb), cb
     );
 
     g_dbus_object_manager_server_export(

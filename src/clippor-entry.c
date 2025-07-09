@@ -1,8 +1,12 @@
 #include "clippor-entry.h"
+#include "clippor-client.h"
 #include "clippor-clipboard.h"
 #include "database.h"
+#include "util.h"
 #include <gio/gio.h>
 #include <glib-object.h>
+
+G_DEFINE_QUARK(clippor_entry_error_quark, clippor_entry_error)
 
 struct _ClipporEntry
 {
@@ -28,8 +32,7 @@ G_DEFINE_TYPE(ClipporEntry, clippor_entry, G_TYPE_OBJECT)
 
 typedef enum
 {
-    PROP_INDEX = 1, // 0 is used on error
-    PROP_MIME_TYPES,
+    PROP_MIME_TYPES = 1,
     PROP_STARRED,
     PROP_ID,
     PROP_CREATION_TIME,
@@ -69,20 +72,6 @@ clippor_entry_get_property(
 
     switch ((ClipporEntryProperty)property_id)
     {
-    case PROP_INDEX:;
-        GError *error = NULL;
-        int64_t val = database_get_entry_index(self, &error);
-
-        if (val == -1)
-        {
-            g_assert(error != NULL);
-
-            g_message("Failed getting index for entry: %s", error->message);
-            g_error_free(error);
-            val = 0;
-        }
-        g_value_set_int64(value, val);
-        break;
     case PROP_MIME_TYPES:
         g_value_set_boxed(value, self->mime_types);
         break;
@@ -135,9 +124,6 @@ clippor_entry_class_init(ClipporEntryClass *class)
     gobject_class->dispose = clippor_entry_dispose;
     gobject_class->finalize = clippor_entry_finalize;
 
-    obj_properties[PROP_INDEX] = g_param_spec_int64(
-        "index", "Index", "Index in history", 0, G_MAXINT64, 0, G_PARAM_READABLE
-    );
     obj_properties[PROP_MIME_TYPES] = g_param_spec_boxed(
         "mime-types", "Mime types",
         "List of mime types that can be represented", G_TYPE_HASH_TABLE,
@@ -168,7 +154,7 @@ static void
 clippor_entry_init(ClipporEntry *self)
 {
     self->mime_types = g_hash_table_new_full(
-        g_str_hash, g_str_equal, g_free, (void (*)(void *))g_bytes_unref
+        g_str_hash, g_str_equal, g_free, (void (*)(void *))clippor_data_unref
     );
 }
 
@@ -177,11 +163,14 @@ clippor_entry_init(ClipporEntry *self)
  * If NULL is passed for id then it is auto generated.
  */
 ClipporEntry *
-clippor_entry_new(
+clippor_entry_new_no_database(
     ClipporClient *from, int64_t creation_time, const char *id,
     ClipporClipboard *parent, ClipporSelectionType selection
 )
 {
+    g_assert(CLIPPOR_IS_CLIPBOARD(parent));
+    g_assert(from == NULL || CLIPPOR_IS_CLIENT(from));
+
     ClipporEntry *entry = g_object_new(CLIPPOR_TYPE_ENTRY, NULL);
 
     entry->from = from;
@@ -215,6 +204,30 @@ clippor_entry_new(
     return entry;
 }
 
+/*
+ * Same as clippor_entry_new_no_database except creates an entry in the database
+ */
+ClipporEntry *
+clippor_entry_new(
+    ClipporClient *from, int64_t creation_time, const char *id,
+    ClipporClipboard *parent, ClipporSelectionType selection, GError **error
+)
+{
+    g_assert(error == NULL || *error == NULL);
+
+    ClipporEntry *entry = clippor_entry_new_no_database(
+        from, creation_time, id, parent, selection
+    );
+
+    if (!database_new_entry_row(entry, error))
+    {
+        g_object_unref(entry);
+        return NULL;
+    }
+
+    return entry;
+}
+
 GHashTable *
 clippor_entry_get_mime_types(ClipporEntry *self)
 {
@@ -240,20 +253,51 @@ clippor_entry_get_selection(ClipporEntry *self)
 }
 
 /*
- * Adds mime type to entry along with its data (can be NULL).
+ * Adds mime type to entry along with its data (can be NULL). Returns TRUE if
+ * the mime type wasn't added to the entry already
  */
-void
-clippor_entry_set_mime_type(
-    ClipporEntry *self, const char *mime_type, GBytes *data
+gboolean
+clippor_entry_set_mime_type_no_database(
+    ClipporEntry *self, const char *mime_type, ClipporData *data
 )
 {
     g_assert(CLIPPOR_IS_ENTRY(self));
     g_assert(mime_type != NULL);
 
     if (data != NULL)
-        g_bytes_ref(data);
+        clippor_data_ref(data);
 
-    g_hash_table_replace(self->mime_types, g_strdup(mime_type), data);
+    return g_hash_table_replace(self->mime_types, g_strdup(mime_type), data);
+}
+
+/*
+ * Same as clippor_entry_set_mime_type_no_database except creates a new database
+ * entry for mime type, updates it if it already exists, or deletes it if data
+ * is NULL.
+ */
+gboolean
+clippor_entry_set_mime_type(
+    ClipporEntry *self, const char *mime_type, ClipporData *data, GError **error
+)
+{
+    g_assert(CLIPPOR_IS_ENTRY(self));
+    g_assert(mime_type != NULL);
+    g_assert(error == NULL || *error == NULL);
+
+    gboolean new =
+        clippor_entry_set_mime_type_no_database(self, mime_type, data);
+
+    if (data == NULL)
+        // Delete mime type
+        g_hash_table_remove(self->mime_types, mime_type);
+
+    // Mime type groups may contain the same mime type as the one from the
+    // selection, if so don't try adding both to the database.
+    if (new)
+        return database_new_mime_type_row(self, mime_type, data, error);
+    else
+        // Mime type already exists, update database
+        return database_update_mime_type_row(self, mime_type, data, error);
 }
 
 gboolean
@@ -298,9 +342,10 @@ clippor_entry_get_id(ClipporEntry *self)
 }
 
 /*
- * Returns a new reference
+ * Returns a new reference to the data, else NULL if mime type doesn't exist in
+ * the entry or database.
  */
-GBytes *
+ClipporData *
 clippor_entry_get_data(
     ClipporEntry *self, const char *mime_type, GError **error
 )
@@ -308,21 +353,30 @@ clippor_entry_get_data(
     g_assert(CLIPPOR_IS_ENTRY(self));
     g_assert(mime_type != NULL);
 
+    if (!g_hash_table_contains(self->mime_types, mime_type))
+    {
+        g_set_error(
+            error, CLIPPOR_ENTRY_ERROR, CLIPPOR_ENTRY_ERROR_NO_MIME_TYPE,
+            "Mime type '%s' does not exist", mime_type
+        );
+        return NULL;
+    }
+
     // If we haven't loaded in the data yet from the database, do it now.
-    GBytes *data = g_hash_table_lookup(self->mime_types, mime_type);
+    ClipporData *data = g_hash_table_lookup(self->mime_types, mime_type);
 
     if (data == NULL)
     {
-        data = database_deserialize_mime_type(self, mime_type, error);
+        data = database_get_entry_mime_type_data(self, mime_type, error);
 
         if (data == NULL)
             return NULL;
 
         g_hash_table_insert(self->mime_types, g_strdup(mime_type), data);
-        return g_bytes_ref(data);
+        return clippor_data_ref(data);
     }
 
-    return g_bytes_ref(g_hash_table_lookup(self->mime_types, mime_type));
+    return clippor_data_ref(data);
 }
 
 ClipporClipboard *
