@@ -20,7 +20,7 @@ static char *STORE_DIR = NULL, *DATA_DIR = NULL;
             "Failed executing statement '%s': %s", statement, err_msg          \
         );                                                                     \
         sqlite3_free(err_msg);                                                 \
-        return FALSE;                                                          \
+        return ret;                                                            \
     } while (FALSE)
 
 #define PREPARE_ERROR(ret)                                                     \
@@ -43,7 +43,7 @@ static char *STORE_DIR = NULL, *DATA_DIR = NULL;
             sqlite3_errmsg(DB)                                                 \
         );                                                                     \
         sqlite3_finalize(stmt);                                                \
-        return FALSE;                                                          \
+        return ret;                                                            \
     } while (FALSE)
 
 #define PREPARE(error_ret)                                                     \
@@ -51,7 +51,7 @@ static char *STORE_DIR = NULL, *DATA_DIR = NULL;
     {                                                                          \
         ret = sqlite3_prepare_v2(DB, statement, -1, &stmt, NULL);              \
         if (ret != SQLITE_OK)                                                  \
-            PREPARE_ERROR(FALSE);                                              \
+            PREPARE_ERROR(error_ret);                                          \
     } while (FALSE)
 
 #define STEP_SINGLE(error_ret)                                                 \
@@ -59,7 +59,7 @@ static char *STORE_DIR = NULL, *DATA_DIR = NULL;
     {                                                                          \
         ret = sqlite3_step(stmt);                                              \
         if (ret != SQLITE_DONE)                                                \
-            STEP_ERROR(FALSE);                                                 \
+            STEP_ERROR(error_ret);                                             \
         sqlite3_finalize(stmt);                                                \
     } while (FALSE)
 
@@ -237,6 +237,51 @@ database_new_entry_row(ClipporEntry *entry, GError **error)
 }
 
 /*
+ * Updates entry row with possibly updated property values of entry
+ */
+gboolean
+database_update_entry_row(ClipporEntry *entry, GError **error)
+{
+    g_assert(CLIPPOR_IS_ENTRY(entry));
+    g_assert(error == NULL || *error == NULL);
+
+    const char *id = clippor_entry_get_id(entry);
+
+    const char *statement = "UPDATE Entries "
+                            "SET Last_used_time = ?, Starred = ? "
+                            "WHERE Id = ?;";
+    sqlite3_stmt *stmt;
+    int ret;
+
+    // Check if entry exists
+    ret = database_entry_id_exists(id, error);
+
+    if (ret == 1)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
+            "Entry '%s' does not exist in the database", id
+        );
+        return FALSE;
+    }
+    else if (ret == -1)
+    {
+        g_prefix_error(error, "Failed updating entry '%s': ", id);
+        return FALSE;
+    }
+
+    PREPARE(FALSE);
+
+    sqlite3_bind_int64(stmt, 1, clippor_entry_get_last_used_time(entry));
+    sqlite3_bind_int(stmt, 2, clippor_entry_is_starred(entry));
+    sqlite3_bind_text(stmt, 3, id, -1, SQLITE_STATIC);
+
+    STEP_SINGLE(FALSE);
+
+    return TRUE;
+}
+
+/*
  * Create a new row for data in the 'Data' table if it doesn't exist and write
  * the data to a file. If it does exist, increase the reference count. Returns
  * the calculated Data_id in an allocated string.
@@ -249,7 +294,7 @@ database_ref_data_row(ClipporData *data, GError **error)
 
     const char *statement = "INSERT OR IGNORE INTO Data"
                             "(Data_id, Ref_count)"
-                            "VALUES (?, 0)";
+                            "VALUES (?, 0);";
     sqlite3_stmt *stmt;
     int ret;
 
@@ -892,7 +937,7 @@ database_get_num_entries(ClipporClipboard *cb, GError **error)
     g_assert(CLIPPOR_IS_CLIPBOARD(cb));
     g_assert(error == NULL || *error == NULL);
 
-    const char *statement = "SELECT COUNT(*) FROM Main WHERE Clipboard = ?;";
+    const char *statement = "SELECT COUNT(*) FROM Entries WHERE Clipboard = ?;";
     sqlite3_stmt *stmt;
     int ret;
 
@@ -925,7 +970,7 @@ database_get_num_entries(ClipporClipboard *cb, GError **error)
 }
 
 /*
- * Returns 0 if entry exist, 1 if entry doesn't exist, and -1 on error.
+ * Returns 0 if entry exists, 1 if entry doesn't exist, and -1 on error.
  */
 int
 database_entry_id_exists(const char *id, GError **error)
@@ -933,7 +978,7 @@ database_entry_id_exists(const char *id, GError **error)
     g_assert(id != NULL);
     g_assert(error == NULL || *error == NULL);
 
-    const char *statement = "SELECT Id FROM Main WHERE Id = ?;";
+    const char *statement = "SELECT Id FROM Entries WHERE Id = ?;";
     sqlite3_stmt *stmt;
     int ret;
 

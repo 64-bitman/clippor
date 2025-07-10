@@ -422,10 +422,52 @@ remove_entry_data_method_cb(
 
 static gboolean
 new_entry_method_cb(
-    BusClipporClipboard *object, GDBusMethodInvocation *invocation
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    gpointer user_data
 )
 {
-    bus_clippor_clipboard_complete_new_entry(object, invocation, NULL);
+    ClipporClipboard *cb = user_data;
+
+    GError *error = NULL;
+    ClipporEntry *entry = clippor_entry_new(
+        NULL, -1, NULL, cb, CLIPPOR_SELECTION_TYPE_NONE, &error
+    );
+
+    if (entry == NULL)
+        DBUS_ERRORE("FailedCreatingEntry", "Failed creating entry");
+
+    clippor_clipboard_add_entry(cb, entry);
+
+    bus_clippor_clipboard_complete_new_entry(
+        object, invocation, clippor_entry_get_id(entry)
+    );
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+set_entry_starred_method_cb(
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    const char *id, gboolean starred, gpointer user_data
+)
+{
+    ClipporClipboard *cb = user_data;
+
+    GError *error = NULL;
+    ClipporEntry *entry = clippor_clipboard_get_entry_by_id(cb, id, &error);
+
+    if (entry == NULL)
+        DBUS_ERRORE("FailedGettingEntry", "Failed getting entry by id");
+
+    if (!clippor_entry_update_property(entry, &error, "starred", starred, NULL))
+    {
+        g_object_unref(entry);
+        DBUS_ERRORE("FailedUpdatingEntry", "Failed updating entry");
+    }
+
+    g_object_unref(entry);
+
+    bus_clippor_clipboard_complete_set_entry_starred(object, invocation);
 
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
@@ -480,6 +522,10 @@ dbus_service_add_clipboard(ClipporClipboard *cb)
     );
     g_signal_connect(
         iface, "handle-new-entry", G_CALLBACK(new_entry_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-set-entry-starred",
+        G_CALLBACK(set_entry_starred_method_cb), cb
     );
 
     g_dbus_object_manager_server_export(

@@ -55,7 +55,7 @@ main(int argc, char *argv[])
 exit:
     if (error != NULL)
     {
-        g_critical("%s\n", error->message);
+        g_warning("%s\n", error->message);
         g_error_free(error);
         return EXIT_FAILURE;
     }

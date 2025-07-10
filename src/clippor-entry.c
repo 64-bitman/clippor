@@ -59,7 +59,7 @@ clippor_entry_set_property(
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
-        break;
+        return;
     }
 }
 
@@ -339,6 +339,32 @@ clippor_entry_get_id(ClipporEntry *self)
     g_assert(CLIPPOR_IS_ENTRY(self));
 
     return self->id;
+}
+
+/*
+ * Updates propery/properties of entry and updates database
+ */
+gboolean
+clippor_entry_update_property(
+    ClipporEntry *self, GError **error, const char *property, ...
+)
+{
+    g_assert(CLIPPOR_IS_ENTRY(self));
+    g_assert(error == NULL || *error == NULL);
+
+    va_list ap;
+
+    va_start(ap, property);
+    g_object_set_valist(G_OBJECT(self), property, ap);
+    va_end(ap);
+
+    if (!database_update_entry_row(self, error))
+    {
+        g_prefix_error(error, "Failed updating entry '%s': ", self->id);
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 /*

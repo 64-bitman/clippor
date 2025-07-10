@@ -13,7 +13,8 @@ G_DECLARE_FINAL_TYPE(ClipporEntry, clippor_entry, CLIPPOR, ENTRY, GObject)
 
 typedef enum
 {
-    CLIPPOR_ENTRY_ERROR_NO_MIME_TYPE
+    CLIPPOR_ENTRY_ERROR_NO_MIME_TYPE,
+    CLIPPOR_ENTRY_ERROR_UPDATE
 } ClipporEntryError;
 
 GQuark clippor_entry_error_quark(void);
@@ -47,6 +48,10 @@ gboolean clippor_entry_is_starred(ClipporEntry *self);
 int64_t clippor_entry_get_creation_time(ClipporEntry *self);
 int64_t clippor_entry_get_last_used_time(ClipporEntry *self);
 const char *clippor_entry_get_id(ClipporEntry *self);
+
+gboolean clippor_entry_update_property(
+    ClipporEntry *self, GError **error, const char *property, ...
+);
 
 ClipporData *clippor_entry_get_data(
     ClipporEntry *self, const char *mime_type, GError **error
