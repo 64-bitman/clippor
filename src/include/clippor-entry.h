@@ -52,6 +52,7 @@ const char *clippor_entry_get_id(ClipporEntry *self);
 gboolean clippor_entry_update_property(
     ClipporEntry *self, GError **error, const char *property, ...
 );
+gboolean clippor_entry_update_last_used(ClipporEntry *self, GError **error);
 
 ClipporData *clippor_entry_get_data(
     ClipporEntry *self, const char *mime_type, GError **error

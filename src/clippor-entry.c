@@ -213,6 +213,8 @@ clippor_entry_new(
     ClipporClipboard *parent, ClipporSelectionType selection, GError **error
 )
 {
+    g_assert(CLIPPOR_IS_CLIPBOARD(parent));
+    g_assert(from == NULL || CLIPPOR_IS_CLIENT(from));
     g_assert(error == NULL || *error == NULL);
 
     ClipporEntry *entry = clippor_entry_new_no_database(
@@ -365,6 +367,17 @@ clippor_entry_update_property(
     }
 
     return TRUE;
+}
+
+gboolean
+clippor_entry_update_last_used(ClipporEntry *self, GError **error)
+{
+    g_assert(CLIPPOR_IS_ENTRY(self));
+    g_assert(error == NULL || *error == NULL);
+
+    return clippor_entry_update_property(
+        self, error, "last-used-time", g_get_real_time(), NULL
+    );
 }
 
 /*

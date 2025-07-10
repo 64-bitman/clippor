@@ -472,6 +472,56 @@ set_entry_starred_method_cb(
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
+static gboolean
+update_entry_last_used_method_cb(
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    const char *id, gpointer user_data
+)
+{
+    ClipporClipboard *cb = user_data;
+
+    GError *error = NULL;
+    ClipporEntry *entry = clippor_clipboard_get_entry_by_id(cb, id, &error);
+
+    if (entry == NULL)
+        DBUS_ERRORE("FailedGettingEntry", "Failed getting entry by id");
+
+    if (!clippor_entry_update_last_used(entry, &error))
+    {
+        g_object_unref(entry);
+        DBUS_ERRORE("FailedUpdatingEntry", "Failed updating entry");
+    }
+
+    g_object_unref(entry);
+
+    bus_clippor_clipboard_complete_update_entry_last_used(object, invocation);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+list_entries_starred_status_method_cb(
+    BusClipporClipboard *object, GDBusMethodInvocation *invocation,
+    gboolean starred, gpointer user_data G_GNUC_UNUSED
+)
+{
+    GError *error = NULL;
+    GPtrArray *array = database_list_entries_starred_status(starred, &error);
+
+    if (array == NULL)
+        DBUS_ERRORE(
+            "FailedGettingEntries", "Failed getting starred/non-starred entries"
+        );
+
+    bus_clippor_clipboard_complete_list_entries_starred_status(
+        object, invocation, (const char **)array->pdata
+    );
+
+    g_ptr_array_unref(array);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
 void
 dbus_service_add_clipboard(ClipporClipboard *cb)
 {
@@ -526,6 +576,14 @@ dbus_service_add_clipboard(ClipporClipboard *cb)
     g_signal_connect(
         iface, "handle-set-entry-starred",
         G_CALLBACK(set_entry_starred_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-update-entry-last-used",
+        G_CALLBACK(update_entry_last_used_method_cb), cb
+    );
+    g_signal_connect(
+        iface, "handle-list-entries-starred-status",
+        G_CALLBACK(list_entries_starred_status_method_cb), cb
     );
 
     g_dbus_object_manager_server_export(

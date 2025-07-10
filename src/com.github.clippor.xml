@@ -42,6 +42,13 @@
             <arg name='id' type='s' direction='in'/>
             <arg name='starred' type='b' direction='in'/>
         </method>
+        <method name='UpdateEntryLastUsed'>
+            <arg name='id' type='s' direction='in'/>
+        </method>
+        <method name='ListEntriesStarredStatus'>
+            <arg name='starred' type='b' direction='in'/>
+            <arg name='ids' type='as' direction='out'/>
+        </method>
     </interface>
     <interface name='com.github.clippor'>
         <method name='ListClipboards'>
