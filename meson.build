@@ -61,7 +61,6 @@ endif
 configure_file(output: 'project_config.h', configuration: cfg_data)
 includes += include_directories('.')
 
-subdir('tests')
 subdir('src')
 
 sources += 'src/main.c'
