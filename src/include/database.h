@@ -20,7 +20,7 @@ typedef enum
 
 GQuark database_error_quark(void);
 
-gboolean database_init(GError **error);
+gboolean database_init(const char *data_directory, GError **error);
 void database_uninit(void);
 
 gboolean database_new_entry_row(ClipporEntry *entry, GError **error);
@@ -31,7 +31,7 @@ gboolean database_new_mime_type_row(
     GError **error
 );
 
-ClipporEntry *database_get_entry_by_position(
+ClipporEntry *database_get_entry_by_index(
     ClipporClipboard *cb, int64_t index, GError **error
 );
 ClipporEntry *
@@ -59,4 +59,5 @@ int64_t database_get_num_entries(ClipporClipboard *cb, GError **error);
 
 int database_entry_id_exists(const char *id, GError **error);
 
-GPtrArray *database_list_entries_starred_status(gboolean starred, GError **error);
+GPtrArray *
+database_list_entries_starred_status(gboolean starred, GError **error);

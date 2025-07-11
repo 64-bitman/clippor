@@ -115,12 +115,19 @@ update_database_version(GError **error)
 }
 
 gboolean
-database_init(GError **error)
+database_init(const char *data_directory, GError **error)
 {
     g_assert(error == NULL || *error == NULL);
 
-    const char *data_dir = g_get_user_data_dir();
-    STORE_DIR = g_strdup_printf("%s/clippor", data_dir);
+    if (data_directory == NULL)
+    {
+        const char *data_dir = g_get_user_data_dir();
+
+        STORE_DIR = g_strdup_printf("%s/clippor", data_dir);
+    }
+    else
+        STORE_DIR = g_strdup(data_directory);
+
     DATA_DIR = g_strdup_printf("%s/data", STORE_DIR);
 
     if (g_mkdir_with_parents(STORE_DIR, 0755) == -1)
@@ -428,6 +435,8 @@ database_get_mime_types_with_id(const char *id, GError **error)
         g_ptr_array_add(arr, g_strdup(s));
     }
 
+    sqlite3_finalize(stmt);
+
     if (ret != SQLITE_DONE)
     {
         g_ptr_array_unref(arr);
@@ -438,7 +447,8 @@ database_get_mime_types_with_id(const char *id, GError **error)
 }
 
 /*
- * Creates an entry object from an SQlite row in the 'Entries' table.
+ * Creates an entry object from an SQlite row in the 'Entries' table. Does not
+ * finalize the SQLite statement.
  */
 static ClipporEntry *
 database_create_entry_from_row(
@@ -456,10 +466,7 @@ database_create_entry_from_row(
     GPtrArray *mime_types = database_get_mime_types_with_id(id, error);
 
     if (mime_types == NULL)
-    {
-        sqlite3_finalize(stmt);
         return NULL;
-    }
 
     ClipporEntry *entry = clippor_entry_new_no_database(
         NULL, creation_time, id, cb, CLIPPOR_SELECTION_TYPE_NONE
@@ -477,18 +484,16 @@ database_create_entry_from_row(
 
     g_ptr_array_unref(mime_types);
 
-    sqlite3_finalize(stmt);
-
     return entry;
 }
 
 /*
- * Get entry by its position, returning NULL if it doesn't exist
+ * Get entry by its position, returning NULL if it doesn't exist. Note that this
+ * does not use the 'Position' column, instead it sorts the rows numerically and
+ * gets the <index>th row.
  */
 ClipporEntry *
-database_get_entry_by_position(
-    ClipporClipboard *cb, int64_t index, GError **error
-)
+database_get_entry_by_index(ClipporClipboard *cb, int64_t index, GError **error)
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(cb));
     g_assert(index >= 0);
@@ -510,7 +515,12 @@ database_get_entry_by_position(
     ret = sqlite3_step(stmt);
 
     if (ret == SQLITE_ROW)
-        return database_create_entry_from_row(cb, stmt, error);
+    {
+        ClipporEntry *entry = database_create_entry_from_row(cb, stmt, error);
+
+        sqlite3_finalize(stmt);
+        return entry;
+    }
     else if (ret == SQLITE_DONE)
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
@@ -531,7 +541,7 @@ database_get_entry_by_id(ClipporClipboard *cb, const char *id, GError **error)
     g_assert(id != NULL);
     g_assert(error == NULL || *error == NULL);
 
-    const char *statement = "SELECT Creation_time, Last_used_time, Starred "
+    const char *statement = "SELECT Id, Creation_time, Last_used_time, Starred "
                             "FROM Entries WHERE Id = ?;";
     sqlite3_stmt *stmt;
     int ret;
@@ -543,7 +553,12 @@ database_get_entry_by_id(ClipporClipboard *cb, const char *id, GError **error)
     ret = sqlite3_step(stmt);
 
     if (ret == SQLITE_ROW)
-        return database_create_entry_from_row(cb, stmt, error);
+    {
+        ClipporEntry *entry = database_create_entry_from_row(cb, stmt, error);
+
+        sqlite3_finalize(stmt);
+        return entry;
+    }
     else if (ret == SQLITE_DONE)
         g_set_error(
             error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
@@ -591,7 +606,7 @@ database_get_entry_mime_type_data(
         sqlite3_finalize(stmt);
 
         // Read from data file
-        char *data;
+        g_autofree char *data;
         size_t sz;
 
         if (!g_file_get_contents(path, &data, &sz, error))
@@ -623,9 +638,11 @@ database_unref_data_row(const char *data_id, GError **error)
     g_assert(error == NULL || *error == NULL);
 
     // Unreference by one
-    const char *statement = "UPDATE Data "
-                            "SET Ref_count = Ref_count - 1 "
-                            "WHERE Data_id = ?;";
+    const char *statement =
+        "UPDATE Data "
+        "SET Ref_count = "
+        "CASE WHEN Ref_count > 0 THEN (Ref_count -1) ELSE 0 END "
+        "WHERE Data_id = ?;";
     sqlite3_stmt *stmt;
     int ret;
 
@@ -799,6 +816,7 @@ database_trim_entry_rows(ClipporClipboard *cb, gboolean all, GError **error)
     g_assert(error == NULL || *error == NULL);
 
     int64_t max_entries = clippor_clipboard_get_max_entries(cb);
+    const char *cb_label = clippor_clipboard_get_label(cb);
 
     const char *statement;
 
@@ -811,18 +829,19 @@ database_trim_entry_rows(ClipporClipboard *cb, gboolean all, GError **error)
                     "Where Clipboard = ? "
                     "ORDER BY Position DESC "
                     "LIMIT ?"
-                    ");";
+                    ") AND Clipboard = ?;";
 
     sqlite3_stmt *stmt;
     int ret;
 
     PREPARE(FALSE);
 
-    sqlite3_bind_text(
-        stmt, 1, clippor_clipboard_get_label(cb), -1, SQLITE_STATIC
-    );
+    sqlite3_bind_text(stmt, 1, cb_label, -1, SQLITE_STATIC);
     if (!all)
+    {
         sqlite3_bind_int64(stmt, 2, max_entries);
+        sqlite3_bind_text(stmt, 3, cb_label, -1, SQLITE_STATIC);
+    }
 
     while ((ret = sqlite3_step(stmt)) == SQLITE_ROW)
     {
@@ -888,15 +907,42 @@ database_update_mime_type_row(
 
     if (ret == SQLITE_ROW)
     {
-        const char *data_id = (const char *)sqlite3_column_text(stmt, 0);
+        g_autofree char *old_data_id =
+            g_strdup((const char *)sqlite3_column_text(stmt, 0));
 
-        if (!database_unref_data_row(data_id, error))
+        sqlite3_finalize(stmt);
+
+        // Update row first so we don't get foreign key restriction
+        const char *new_data_id = database_ref_data_row(data, error);
+
+        if (new_data_id == NULL)
         {
             g_prefix_error_literal(error, "Failed updating mime type row: ");
-            sqlite3_finalize(stmt);
             return FALSE;
         }
-        sqlite3_finalize(stmt);
+
+        statement = "UPDATE Mime_types "
+                    "SET Data_id = ? "
+                    "WHERE Id = ? AND Mime_type = ?;";
+
+        PREPARE(FALSE);
+
+        sqlite3_bind_text(stmt, 1, new_data_id, -1, SQLITE_STATIC);
+        sqlite3_bind_text(
+            stmt, 2, clippor_entry_get_id(entry), -1, SQLITE_STATIC
+        );
+        sqlite3_bind_text(stmt, 3, mime_type, -1, SQLITE_STATIC);
+
+        STEP_SINGLE(FALSE);
+
+        // Unreference old data_id
+        if (!database_unref_data_row(old_data_id, error))
+        {
+            g_prefix_error_literal(error, "Failed updating mime type row: ");
+            return FALSE;
+        }
+
+        return TRUE;
     }
     else if (ret == SQLITE_DONE)
     {
@@ -909,29 +955,6 @@ database_update_mime_type_row(
     }
     else
         STEP_ERROR(FALSE);
-
-    const char *data_id = database_ref_data_row(data, error);
-
-    if (data_id == NULL)
-    {
-        g_prefix_error_literal(error, "Failed updating mime type row: ");
-        return FALSE;
-    }
-
-    // Update row
-    statement = "UPDATE Mime_types "
-                "SET Data_id = ? "
-                "WHERE Id = ? AND Mime_type = ?;";
-
-    PREPARE(FALSE);
-
-    sqlite3_bind_text(stmt, 1, data_id, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, clippor_entry_get_id(entry), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 3, mime_type, -1, SQLITE_STATIC);
-
-    STEP_SINGLE(FALSE);
-
-    return TRUE;
 }
 
 /*
@@ -1024,13 +1047,13 @@ database_list_entries_starred_status(gboolean starred, GError **error)
     PREPARE(NULL);
 
     sqlite3_bind_int(stmt, 1, starred);
-    
+
     GPtrArray *arr = g_ptr_array_new_null_terminated(1, g_free, TRUE);
 
     while ((ret = sqlite3_step(stmt)) == SQLITE_ROW)
     {
         const char *id = (const char *)sqlite3_column_text(stmt, 0);
-        
+
         g_ptr_array_add(arr, g_strdup(id));
     }
 

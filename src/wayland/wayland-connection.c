@@ -451,12 +451,30 @@ wayland_connection_get_seat(WaylandConnection *self, const char *name)
         GHashTableIter iter;
 
         g_hash_table_iter_init(&iter, self->gobjects.seats);
-        g_hash_table_iter_next(&iter, NULL, (void **)&seat);
+        g_hash_table_iter_next(&iter, NULL, (gpointer *)&seat);
     }
     else
         seat = g_hash_table_lookup(self->gobjects.seats, name);
 
     return seat;
+}
+
+WaylandSeat *
+wayland_connection_match_seat(WaylandConnection *self, GRegex *pattern)
+{
+    g_assert(WAYLAND_IS_CONNECTION(self));
+
+    GHashTableIter iter;
+    const char *name;
+    WaylandSeat *seat;
+
+    g_hash_table_iter_init(&iter, self->gobjects.seats);
+
+    while (g_hash_table_iter_next(&iter, (gpointer *)&name, (gpointer *)&seat))
+        if (g_regex_match(pattern, name, G_REGEX_MATCH_DEFAULT, NULL))
+            return seat;
+
+    return NULL;
 }
 
 /*

@@ -8,6 +8,8 @@
 static gboolean opt_version = FALSE;
 static gboolean opt_server = FALSE;
 static gboolean opt_debug = FALSE;
+static char *opt_config = NULL;
+static char *opt_data = NULL;
 
 static GOptionEntry help_entries[] = {
     {"version", 'v', 0, G_OPTION_ARG_NONE, &opt_version, "Print version", NULL},
@@ -15,9 +17,12 @@ static GOptionEntry help_entries[] = {
      NULL},
     {"debug", 'd', 0, G_OPTION_ARG_NONE, &opt_debug, "Enable verbose logging",
      NULL},
+    {"config", 'c', 0, G_OPTION_ARG_STRING, &opt_config, "Config file location",
+     NULL},
+    {"data", 'D', 0, G_OPTION_ARG_STRING, &opt_data, "Data directory location",
+     NULL},
     G_OPTION_ENTRY_NULL
 };
-
 
 int
 main(int argc, char *argv[])
@@ -48,9 +53,11 @@ main(int argc, char *argv[])
 
     if (opt_server)
     {
-        if (!server_start())
+        if (!server_start(opt_config, opt_data))
             goto exit;
     }
+
+    g_free(opt_config);
 
 exit:
     if (error != NULL)

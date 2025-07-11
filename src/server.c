@@ -6,6 +6,7 @@
 #include "glib-object.h"
 #include "glib-unix.h"
 #include "wayland-connection.h"
+#include "wayland-seat.h"
 #include <glib.h>
 
 static GMainContext *MAIN_CONTEXT;
@@ -16,16 +17,34 @@ static GPtrArray *WAYLAND_CONNECTIONS;
 
 static Config *CONFIG;
 
+static gboolean RUNNING = FALSE;
+
 static void
-exit_handler(void)
+wayland_connections_free_func(GWeakRef *ref)
 {
-    g_info("Exiting...");
+    WaylandConnection *ct = g_weak_ref_get(ref);
 
-    g_main_loop_quit(MAIN_LOOP);
+    if (ct != NULL)
+    {
+        // Unref twice because g_weak_ref_get creates a strong ref too
+        g_object_unref(ct);
+        g_object_unref(ct);
+    }
+
+    g_weak_ref_clear(ref);
+    g_free(ref);
+}
+
+static void
+server_free(void)
+{
+    if (!RUNNING)
+        return;
+    RUNNING = FALSE;
+
     g_main_loop_unref(MAIN_LOOP);
-
-    g_ptr_array_unref(CLIPBOARDS);
     g_ptr_array_unref(WAYLAND_CONNECTIONS);
+    g_ptr_array_unref(CLIPBOARDS);
 
     config_free(CONFIG);
     dbus_server_uninit();
@@ -33,9 +52,10 @@ exit_handler(void)
 }
 
 static gboolean
-on_sigint(gpointer user_data G_GNUC_UNUSED)
+on_exit_signal(gpointer user_data G_GNUC_UNUSED)
 {
-    exit_handler();
+    g_main_loop_quit(MAIN_LOOP);
+    g_info("Exiting...");
     return G_SOURCE_REMOVE;
 }
 
@@ -61,8 +81,9 @@ server_set_config_add_wayland_seat(
     if (cb == NULL)
         return;
 
-    g_autofree char *label =
-        g_strdup_printf("%s_%s", config_dpy->display, config_seat->name);
+    g_autofree char *label = g_strdup_printf(
+        "%s_%s", config_dpy->display, wayland_seat_get_name(seat)
+    );
 
     if (config_seat->regular)
         clippor_clipboard_add_client(
@@ -112,9 +133,14 @@ server_set_config(void)
         {
             g_warning("%s", error->message);
             g_error_free(error);
+            continue;
         }
 
-        g_ptr_array_add(WAYLAND_CONNECTIONS, ct);
+        GWeakRef *ref = g_new(GWeakRef, 1);
+
+        g_weak_ref_init(ref, ct);
+
+        g_ptr_array_add(WAYLAND_CONNECTIONS, ref);
 
         for (uint k = 0; k < config_dpy.seats->len; k++)
         {
@@ -140,7 +166,7 @@ server_set_config(void)
             }
 
             WaylandSeat *seat =
-                wayland_connection_get_seat(ct, config_seat.name);
+                wayland_connection_match_seat(ct, config_seat.name);
 
             if (seat == NULL)
                 continue;
@@ -152,34 +178,40 @@ server_set_config(void)
     }
 }
 
-/*
- * Should only be called once within program lifetime
- */
 gboolean
-server_start(void)
+server_start(const char *config_file, const char *data_directory)
 {
+    if (RUNNING)
+        return FALSE;
+
     MAIN_CONTEXT = g_main_context_default();
     MAIN_LOOP = g_main_loop_new(MAIN_CONTEXT, FALSE);
 
     GError *error = NULL;
 
-    if ((CONFIG = config_init(&error)) == NULL)
+    if ((CONFIG = config_init(config_file, &error)) == NULL)
         goto fail;
-    if (!database_init(&error))
+    if (!database_init(data_directory, &error))
         goto fail;
     if (CONFIG->dbus_service &&
         !dbus_service_init(&error, CONFIG->dbus_timeout))
         goto fail;
 
     CLIPBOARDS = g_ptr_array_new_with_free_func(g_object_unref);
-    WAYLAND_CONNECTIONS = g_ptr_array_new_with_free_func(g_object_unref);
+    WAYLAND_CONNECTIONS = g_ptr_array_new_with_free_func(
+        (GDestroyNotify)wayland_connections_free_func
+    );
 
     server_set_config();
 
-    g_unix_signal_add(SIGINT, on_sigint, NULL);
-    g_unix_signal_add(SIGTERM, on_sigint, NULL);
+    g_unix_signal_add(SIGINT, on_exit_signal, NULL);
+    g_unix_signal_add(SIGTERM, on_exit_signal, NULL);
+
+    RUNNING = TRUE;
 
     g_main_loop_run(MAIN_LOOP);
+
+    server_free();
 
     return TRUE;
 fail:
@@ -201,4 +233,10 @@ const GPtrArray *
 server_get_clipboards(void)
 {
     return CLIPBOARDS;
+}
+
+gboolean
+server_is_running(void)
+{
+    return RUNNING;
 }

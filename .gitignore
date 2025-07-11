@@ -15,3 +15,4 @@ bin/
 bin/*
 Session.vim
 schemas/gschemas.compiled
+tests/*.toml

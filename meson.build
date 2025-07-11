@@ -8,6 +8,7 @@ project('clippor', 'c',
 
 if get_option('buildtype').startswith('debug')
   add_project_arguments('-DDEBUG',
+    '-ggdb3',
     # '-pg',
     # '-no-pie',
     language : 'c')
@@ -63,11 +64,12 @@ includes += include_directories('.')
 
 subdir('src')
 
-sources += 'src/main.c'
-
-executable('clippor',
+clippor = executable('clippor',
+  'src/main.c',
   sources,
   include_directories: includes,
   dependencies: deps,
   link_with: link_with
   )
+
+subdir('tests')

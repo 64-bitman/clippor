@@ -49,6 +49,10 @@
             <arg name='starred' type='b' direction='in'/>
             <arg name='ids' type='as' direction='out'/>
         </method>
+        <method name='SetCurrentEntry'>
+            <arg name='id' type='s' direction='in'/>
+            <arg name='clear' type='b' direction='in'/>
+        </method>
     </interface>
     <interface name='com.github.clippor'>
         <method name='ListClipboards'>

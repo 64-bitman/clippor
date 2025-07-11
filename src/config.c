@@ -22,7 +22,8 @@ config_wayland_seat_free(ConfigWaylandSeat *config_seat)
 {
     g_assert(config_seat != NULL);
 
-    g_free(config_seat->name);
+    if (config_seat->name != NULL)
+        g_regex_unref(config_seat->name);
     g_free(config_seat->clipboard);
 }
 
@@ -77,6 +78,9 @@ config_populate(Config *config, const char *config_file, GError **error)
     TOML_SET(dbus_timeout, u.int64, config->dbus_timeout, 500);
     TOML_SET(dbus_service, u.boolean, config->dbus_service, TRUE);
 
+    if (config->dbus_timeout < -1)
+        TOML_ERROR("'dbus_timeout' must be greater than or equal to -1");
+
     toml_datum_t clipboards = toml_seek(result.toptab, "clipboards");
 
     if (TOML_IS_NOT_TYPE(clipboards, TOML_ARRAY))
@@ -123,11 +127,11 @@ config_populate(Config *config, const char *config_file, GError **error)
 
         config_cb.name = g_strdup(clipboard_name.u.str.ptr);
         config_cb.allowed_mime_types =
-            g_ptr_array_new_with_free_func((void (*)(void *))g_regex_unref);
+            g_ptr_array_new_with_free_func((GDestroyNotify)g_regex_unref);
 
         config_cb.mime_type_groups = g_hash_table_new_full(
-            g_direct_hash, g_direct_equal, (void (*)(void *))g_regex_unref,
-            (void (*)(void *))g_ptr_array_unref
+            g_direct_hash, g_direct_equal, (GDestroyNotify)g_regex_unref,
+            (GDestroyNotify)g_ptr_array_unref
         );
 
         g_array_append_val(config->clipboards, config_cb);
@@ -225,7 +229,7 @@ skip_clipboards:;
         toml_datum_t data_timeout = toml_seek(wayland_display, "data_timeout");
         toml_datum_t seats = toml_seek(wayland_display, "seats");
 
-        if (TOML_IS_NOT_TYPE(display, TOML_STRING))
+        if (TOML_IS_NOT_TYPE2(display, TOML_STRING))
             TOML_ERROR("'display' is not a string or does not exist");
 
         if (TOML_IS_NOT_TYPE(connection_timeout, TOML_INT64))
@@ -239,17 +243,21 @@ skip_clipboards:;
 
         ConfigWaylandDisplay config_dpy;
 
-        config_dpy.display = util_expand_env(display.u.str.ptr);
-
         TOML_SET(
             connection_timeout, u.int64, config_dpy.connection_timeout, 500
         );
         TOML_SET(data_timeout, u.int64, config_dpy.data_timeout, 500);
 
+        if (config_dpy.connection_timeout < -1)
+            TOML_ERROR("'connection_timeout' must be greater than equal to -1");
+        if (config_dpy.data_timeout < -1)
+            TOML_ERROR("'data_timeout' must be greater than equal to -1");
+
+        config_dpy.display = util_expand_env(display.u.str.ptr);
         config_dpy.seats = g_array_new(FALSE, TRUE, sizeof(ConfigWaylandSeat));
 
         g_array_set_clear_func(
-            config_dpy.seats, (void (*)(void *))config_wayland_seat_free
+            config_dpy.seats, (GDestroyNotify)config_wayland_seat_free
         );
 
         g_array_append_val(config->wayland_displays, config_dpy);
@@ -291,7 +299,19 @@ once:
                 if (once)
                     config_seat.name = NULL;
                 else
-                    config_seat.name = util_expand_env(seat_name.u.str.ptr);
+                {
+                    config_seat.name = g_regex_new(
+                        seat_name.u.str.ptr, G_REGEX_OPTIMIZE,
+                        G_REGEX_MATCH_DEFAULT, error
+                    );
+                    if (config_seat.name == NULL)
+                    {
+                        g_prefix_error_literal(
+                            error, "Failed parsing configuration file: "
+                        );
+                        goto fail;
+                    }
+                }
                 config_seat.clipboard = g_strdup(clipboard.u.str.ptr);
 
                 TOML_SET(regular, u.boolean, config_seat.regular, TRUE);
@@ -314,13 +334,20 @@ fail:
 }
 
 Config *
-config_init(GError **error)
+config_init(const char *user_config, GError **error)
 {
     g_assert(error == NULL || *error == NULL);
 
-    const char *config_dir = g_get_user_config_dir();
-    g_autofree char *config_file =
-        g_strdup_printf("%s/clippor/config.toml", config_dir);
+    g_autofree char *config_file;
+
+    if (user_config == NULL)
+    {
+        const char *config_dir = g_get_user_config_dir();
+
+        config_file = g_strdup_printf("%s/clippor/config.toml", config_dir);
+    }
+    else
+        config_file = g_strdup(user_config);
 
     if (g_access(config_file, R_OK) == -1)
     {
@@ -339,10 +366,10 @@ config_init(GError **error)
         g_array_new(FALSE, TRUE, sizeof(ConfigWaylandDisplay));
 
     g_array_set_clear_func(
-        config->clipboards, (void (*)(void *))config_clipboard_free
+        config->clipboards, (GDestroyNotify)config_clipboard_free
     );
     g_array_set_clear_func(
-        config->wayland_displays, (void (*)(void *))config_wayland_display_free
+        config->wayland_displays, (GDestroyNotify)config_wayland_display_free
     );
 
     if (!config_populate(config, config_file, error))

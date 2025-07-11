@@ -10,6 +10,19 @@
     for (GList *__glist = list; __glist && (item = __glist->data, TRUE);       \
          __glist = __glist->next)
 
+#define assert_wait(expr, cond, assert_suffix, timeout_ms)                     \
+    do                                                                         \
+    {                                                                          \
+        int64_t __start = g_get_monotonic_time();                              \
+        while (!(expr cond))                                                   \
+        {                                                                      \
+            if (g_get_monotonic_time() - __start >= timeout_ms * 1000)         \
+                break;                                                         \
+            g_usleep(1000);                                                    \
+        }                                                                      \
+        g_assert_##assert_suffix(expr);                                        \
+    } while (FALSE)
+
 typedef struct _ClipporData ClipporData;
 
 #define UTIL_ERROR (util_error_quark())
@@ -17,18 +30,20 @@ typedef struct _ClipporData ClipporData;
 typedef enum
 {
     UTIL_ERROR_SEND_DATA,
-    UTIL_ERROR_RECEIVE_DATA
+    UTIL_ERROR_RECEIVE_DATA,
+    UTIL_ERROR_RMDIR
 } UtilError;
 
 GQuark util_error_quark(void);
 
 gboolean
 util_send_data(int32_t fd, ClipporData *data, int timeout, GError **error);
-ClipporData *util_receive_data(
-    int32_t fd, int timeout, gboolean checksum, GError **error
-);
+ClipporData *
+util_receive_data(int32_t fd, int timeout, gboolean checksum, GError **error);
 
 char *util_expand_env(const char *name);
+
+gboolean util_remove_dir(const char *path, GError **error);
 
 ClipporData *clippor_data_new(gboolean do_checksum);
 ClipporData *

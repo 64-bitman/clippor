@@ -66,6 +66,8 @@ typedef struct _WaylandSeat WaylandSeat;
 int wayland_connection_get_fd(WaylandConnection *self);
 WaylandSeat *
 wayland_connection_get_seat(WaylandConnection *self, const char *name);
+WaylandSeat *
+wayland_connection_match_seat(WaylandConnection *self, GRegex *pattern);
 GHashTable *wayland_connection_get_seats(WaylandConnection *self);
 char *wayland_connection_get_display_name(WaylandConnection *self);
 struct wl_display *wayland_connection_get_display(WaylandConnection *self);

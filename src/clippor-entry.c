@@ -23,7 +23,8 @@ struct _ClipporEntry
     int64_t creation_time;  // In microseconds
     int64_t last_used_time; // In microseconds
 
-    ClipporClient *from; // Which client this entry is from, NULL if unknown
+    GWeakRef from; // Which client this entry is from, can be empty if unknown
+                   // or client has been finalized.
     ClipporSelectionType selection; // Which selection this entry is based on,
                                     // CLIPPOR_SELECTION_TYPE_NONE if unknown
 };
@@ -154,7 +155,7 @@ static void
 clippor_entry_init(ClipporEntry *self)
 {
     self->mime_types = g_hash_table_new_full(
-        g_str_hash, g_str_equal, g_free, (void (*)(void *))clippor_data_unref
+        g_str_hash, g_str_equal, g_free, (GDestroyNotify)clippor_data_unref
     );
 }
 
@@ -173,7 +174,7 @@ clippor_entry_new_no_database(
 
     ClipporEntry *entry = g_object_new(CLIPPOR_TYPE_ENTRY, NULL);
 
-    entry->from = from;
+    g_weak_ref_init(&entry->from, from);
     entry->cb = parent;
     entry->selection = selection;
 
@@ -243,7 +244,7 @@ clippor_entry_is_from(ClipporEntry *self)
 {
     g_assert(CLIPPOR_IS_ENTRY(self));
 
-    return self->from;
+    return g_weak_ref_get(&self->from);
 }
 
 ClipporSelectionType

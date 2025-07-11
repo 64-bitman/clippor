@@ -3,8 +3,7 @@ MESON_FLAGS :=
 ifeq ($(RELEASE), 1)
 	MESON_FLAGS += --buildtype=release
 else
-	MESON_FLAGS += --buildtype=debug -Db_sanitize=address,undefined
-				   # -Db_coverage=true
+	MESON_FLAGS += --buildtype=debug -Db_sanitize=address,undefined # -Db_coverage=true
 endif
 
 all: build/
@@ -24,6 +23,6 @@ run: all
 						 build/clippor --debug --server
 
 test: all
-	meson test --print-errorlogs -C build/
+	meson test --verbose -C build/
 
 .PHONY: all reset clean run test

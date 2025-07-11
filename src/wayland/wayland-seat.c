@@ -420,6 +420,14 @@ wayland_data_device_listener_selection(
     // Destroy previous offer
     wayland_data_offer_destroy(sel->offer);
 
+    if (sel->source != NULL)
+    {
+        // We are the source client
+        wayland_data_offer_destroy(offer);
+        sel->offer = NULL;
+        return;
+    }
+
     if (offer == NULL)
     {
         GError *error = NULL;
@@ -438,14 +446,6 @@ wayland_data_device_listener_selection(
             );
             g_error_free(error);
         }
-        return;
-    }
-
-    if (sel->source != NULL)
-    {
-        // We are the source client
-        wayland_data_offer_destroy(offer);
-        sel->offer = NULL;
         return;
     }
 
@@ -671,11 +671,11 @@ wayland_seat_client_set_entry(
     WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
     ClipporEntry *entry_ref = g_weak_ref_get(&sel->entry);
 
-    if ((update && entry_ref == NULL) || !update)
-        g_weak_ref_set(&sel->entry, entry);
-
     if (entry_ref != NULL)
         g_object_unref(entry_ref);
+
+    if ((update && entry_ref == NULL) || !update)
+        g_weak_ref_set(&sel->entry, entry);
 
     //  Don't want to immediately steal the selection when there is a new one
     //  (Only if selection is the same).

@@ -2,7 +2,8 @@
 
 #include <glib.h>
 
-typedef struct {
+typedef struct
+{
     char *name;
 
     int64_t max_entries;
@@ -12,22 +13,24 @@ typedef struct {
     GHashTable *mime_type_groups;
 } ConfigClipboard;
 
-typedef struct {
-    char *name;
+typedef struct
+{
+    GRegex *name;
     char *clipboard;
 
     gboolean regular;
     gboolean primary;
 } ConfigWaylandSeat;
 
-typedef struct {
+typedef struct
+{
     char *display;
 
     int connection_timeout;
     int data_timeout;
 
-    GArray *seats;  // May contain one seat with a NULL name to assume all
-                    // seats.
+    GArray *seats; // May contain one seat with a NULL name to assume all
+                   // seats.
 } ConfigWaylandDisplay;
 
 typedef struct
@@ -50,5 +53,5 @@ typedef enum
 
 GQuark config_error_quark(void);
 
-Config *config_init(GError **error);
+Config *config_init(const char *user_config, GError **error);
 void config_free(Config *config);

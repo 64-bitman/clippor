@@ -126,6 +126,7 @@ clippor_clipboard_dispose(GObject *object)
     ClipporClipboard *self = CLIPPOR_CLIPBOARD(object);
 
     g_hash_table_remove_all(self->clients);
+
     g_queue_clear_full(self->entries, g_object_unref);
 
     G_OBJECT_CLASS(clippor_clipboard_parent_class)->dispose(object);
@@ -200,10 +201,10 @@ clippor_clipboard_init(ClipporClipboard *self)
     self->entries = g_queue_new();
 
     self->allowed_mime_types =
-        g_ptr_array_new_with_free_func((void (*)(void *))g_regex_unref);
+        g_ptr_array_new_with_free_func((GDestroyNotify)g_regex_unref);
     self->mime_type_groups = g_hash_table_new_full(
-        g_direct_hash, g_direct_equal, (void (*)(void *))g_regex_unref,
-        (void (*)(void *))g_ptr_array_unref
+        g_direct_hash, g_direct_equal, (GDestroyNotify)g_regex_unref,
+        (GDestroyNotify)g_ptr_array_unref
     );
 }
 
@@ -219,9 +220,9 @@ clippor_clipboard_new(const char *label)
     ClipporEntry *entry;
     GError *error = NULL;
 
-    for (int64_t i = 0; i < cb->max_entries; i++)
+    for (int64_t i = 0; i < cb->max_entries_memory; i++)
     {
-        entry = database_get_entry_by_position(cb, i, &error);
+        entry = database_get_entry_by_index(cb, i, &error);
 
         if (entry == NULL)
         {
@@ -337,6 +338,8 @@ clippor_clipboard_update_clients(
             );
             g_clear_error(&error);
         }
+
+        g_object_unref(client);
     }
 }
 
@@ -510,6 +513,12 @@ clippor_clipboard_add_client(
     else
     {
         g_assert(g_hash_table_contains(self->selections, client));
+
+        // Ignore if we are already listening to client selection
+        if (GPOINTER_TO_UINT(g_hash_table_lookup(self->selections, client)) &
+            selection)
+            return;
+
         sel_bitmask |=
             GPOINTER_TO_UINT(g_hash_table_lookup(self->selections, client));
     }
@@ -559,8 +568,8 @@ clippor_clipboard_get_entry(
     ClipporEntry *entry;
 
     // If index is outside the in memory list, search the database.
-    if (index > self->max_entries_memory)
-        entry = database_get_entry_by_position(self, index, error);
+    if (index >= self->max_entries_memory)
+        entry = database_get_entry_by_index(self, index, error);
     else
     {
         entry = g_queue_peek_nth(self->entries, index);
