@@ -40,15 +40,17 @@ server_free(void)
 {
     if (!RUNNING)
         return;
-    RUNNING = FALSE;
 
     g_main_loop_unref(MAIN_LOOP);
+
+    wayland_connection_free_static();
     g_ptr_array_unref(WAYLAND_CONNECTIONS);
     g_ptr_array_unref(CLIPBOARDS);
 
     config_free(CONFIG);
     dbus_server_uninit();
     database_uninit();
+    RUNNING = FALSE;
 }
 
 static gboolean

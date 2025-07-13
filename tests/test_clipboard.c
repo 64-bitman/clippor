@@ -340,7 +340,16 @@ test_clipboard_new_entry_pre(void)
 
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
 
-    g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
+    g_autoptr(ClipporEntry) entry = NULL;
+
+    assert_wait(
+        (entry = clippor_clipboard_get_entry(cb, 0, NULL)), != NULL, nonnull,
+        3000
+    );
+
+    g_autofree char *copy = get_entry_contents(entry, "text/plain");
+
+    g_assert_cmpstr(copy, ==, "TEST");
 
     g_free(config_contents);
     g_assert_true(stop_server(server));
@@ -382,9 +391,6 @@ test_clipboard_history_trim(void)
         g_autofree char *copy = g_strdup_printf("TEST %d", i);
 
         wl_copy(wc, FALSE, copy);
-
-        // Dont copy too fast to the point where its faster than the data being
-        // sent over the pipe.
     }
 
     g_usleep(100 * 1000);
@@ -702,6 +708,70 @@ test_clipboard_history_own_on_clear(void)
 }
 
 /*
+ * Test if removing an entry from history works correctly
+ */
+static void
+test_clipboard_history_remove(void)
+{
+    const char *config_contents_fmt = "dbus_service = false\n"
+                                      "[[clipboards]]\n"
+                                      "clipboard = \"Default\"\n"
+                                      "max_entries = 3\n"
+                                      "max_entries_memory = 1\n"
+                                      "[[wayland_displays]]\n"
+                                      "display = \"%s\"\n"
+                                      "[wayland_displays.seats]\n"
+                                      "clipboard = \"Default\"\n"
+                                      "regular = true\n"
+                                      "primary = false\n";
+
+    WaylandCompositor *wc = wayland_compositor_start();
+
+    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
+
+    ServerInstance *server = run_server("clipboard", config_contents);
+
+    GError *error = NULL;
+    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+
+    g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
+
+    wl_copy(wc, FALSE, "MEMORY");
+    wl_copy(wc, FALSE, "DATABASE STARRED");
+    wl_copy(wc, FALSE, "DATABASE");
+
+    g_usleep(100 * 1000);
+
+    ClipporEntry *entry = clippor_clipboard_get_entry(cb, 0, &error);
+
+    g_assert_nonnull(entry);
+
+    clippor_entry_update_property(entry, &error, "starred", TRUE, NULL);
+    g_assert_no_error(error);
+
+    g_assert_cmpint(database_get_num_entries(cb, &error), ==, 3);
+    g_assert_no_error(error);
+
+    clippor_clipboard_remove_entry(cb, clippor_entry_get_id(entry), &error);
+    g_assert_no_error(error);
+
+    g_assert_cmpint(database_get_num_entries(cb, &error), ==, 2);
+    g_assert_no_error(error);
+
+    g_free(config_contents);
+    g_assert_true(stop_server(server));
+    wayland_compositor_stop(wc);
+}
+
+/*
+ * Test if clearing the history works properly
+ */
+static void
+test_clipboard_history_clear(void)
+{
+}
+
+/*
  * Test if allowed_mime_types config option works properly
  */
 static void
@@ -792,8 +862,8 @@ test_clipboard_filter_mime_type_groups(void)
     g_assert_cmpint(g_hash_table_size(mime_types), ==, 5);
 
     g_free(config_contents);
-    wayland_compositor_stop(wc);
     g_assert_true(stop_server(server));
+    wayland_compositor_stop(wc);
 }
 
 int
@@ -824,6 +894,8 @@ main(int argc, char **argv)
     g_test_add_func(
         "/clipboard/history/own-on-clear", test_clipboard_history_own_on_clear
     );
+    g_test_add_func("/clipboard/history/remove", test_clipboard_history_remove);
+    g_test_add_func("/clipboard/history/clear", test_clipboard_history_clear);
     g_test_add_func(
         "/clipboard/filter/allowed-mime-types",
         test_clipboard_filter_allowed_mime_types

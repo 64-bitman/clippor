@@ -634,7 +634,13 @@ wayland_seat_client_get_data(
     ClipporData *data = NULL;
 
     if (sel->offer == NULL)
+    {
+        g_set_error(
+            error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_NO_OFFER,
+            "Seat '%s' %s selection is cleared", seat->name, sel->name
+        );
         return NULL;
+    }
 
     GUnixPipe fds = G_UNIX_PIPE_INIT;
 

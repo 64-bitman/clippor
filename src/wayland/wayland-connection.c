@@ -1099,7 +1099,7 @@ wayland_data_offer_destroy(WaylandDataOffer *offer)
     }
     uint32_t id = wl_proxy_get_id(offer->proxy);
 
-    g_hash_table_remove(pending_offers, &id);
+    g_hash_table_remove(pending_offers, GUINT_TO_POINTER(id));
     g_ptr_array_unref(offer->mime_types);
     g_free(offer);
 }
@@ -1213,10 +1213,7 @@ wayland_data_device_event_data_offer_gen_handler(
 
     uint32_t id = wl_proxy_get_id(offer_proxy);
 
-    // When I used g_int64_hash and alloced memory, if alot of stuff was copied,
-    // sometimes the hash_function won't match and lookup would return NULL.
-    // Using a direct hash seems to avoid this.
-    g_hash_table_insert(pending_offers, GINT_TO_POINTER(id), offer);
+    g_hash_table_insert(pending_offers, GUINT_TO_POINTER(id), offer);
 
     // 10 mime types is generally the normal maximum from my experience.
     offer->mime_types = g_ptr_array_new_full(10, g_free);
@@ -1237,15 +1234,16 @@ wayland_data_device_event_selection_gen_handler(
 
     uint32_t id = wl_proxy_get_id(offer_proxy);
     WaylandDataOffer *offer =
-        g_hash_table_lookup(pending_offers, GINT_TO_POINTER(id));
-
-    g_assert(offer != NULL);
+        g_hash_table_lookup(pending_offers, GUINT_TO_POINTER(id));
 
     if (device->listener->selection == NULL)
     {
         wayland_data_offer_destroy(offer);
         return;
     }
+
+    // Let the callback take ownership of the offer now
+    g_hash_table_remove(pending_offers, GUINT_TO_POINTER(id));
 
     device->listener->selection(device->data, device, offer, selection);
 }
@@ -1423,4 +1421,28 @@ wayland_data_offer_get_mime_types(WaylandDataOffer *offer)
 {
     g_assert(wayland_data_offer_is_valid(offer));
     return offer->mime_types;
+}
+
+/*
+ * Make sure to call this before disconnecting all the Wayland connections.
+ */
+void
+wayland_connection_free_static(void)
+{
+    if (pending_offers != NULL)
+    {
+        GHashTableIter iter;
+        WaylandDataOffer *offer;
+
+        g_hash_table_iter_init(&iter, pending_offers);
+
+        while (g_hash_table_iter_next(&iter, NULL, (gpointer *)&offer))
+        {
+            wayland_data_offer_destroy(offer);
+            g_hash_table_iter_remove(&iter);
+        }
+
+        g_hash_table_unref(pending_offers);
+        pending_offers = NULL;
+    }
 }

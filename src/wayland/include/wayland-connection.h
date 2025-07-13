@@ -127,3 +127,5 @@ void wayland_data_offer_add_listener(
 );
 
 GPtrArray *wayland_data_offer_get_mime_types(WaylandDataOffer *offer);
+
+void wayland_connection_free_static(void);

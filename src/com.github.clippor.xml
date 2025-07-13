@@ -53,10 +53,33 @@
             <arg name='id' type='s' direction='in'/>
             <arg name='clear' type='b' direction='in'/>
         </method>
+        <method name='ListClients'>
+            <arg name='clients' type='as' direction='out'/>
+        </method>
+        <method name='Remove'/>
+    </interface>
+    <interface name='com.github.clippor.wayland_connections'>
+        <method name='ListSeats'>
+            <arg name='seats' type ='a{ss}' direction='out'/>
+        </method>
+        <method name='ConnectSeat'>
+            <arg name='seat' type='s' direction='in'/>
+            <arg name='clipboard' type='s' direction='in'/>
+        </method>
+        <method name='Remove'/>
     </interface>
     <interface name='com.github.clippor'>
         <method name='ListClipboards'>
             <arg name='clipboards' type ='as' direction='out'/>
+        </method>
+        <method name='AddClipboard'>
+            <arg name='label' type='s' direction='in'/>
+        </method>
+        <method name='ListWaylandConnections'>
+            <arg name='displays' type ='as' direction='out'/>
+        </method>
+        <method name='AddWaylandConnection'>
+            <arg name='display' type = 's' direction='in'/>
         </method>
     </interface>
 </node>

@@ -265,6 +265,8 @@ stop_server(ServerInstance *server)
     config_file = NULL;
     data_directory = NULL;
 
+    while(server_is_running());
+
     return ret;
 }
 
