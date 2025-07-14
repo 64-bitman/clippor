@@ -53,7 +53,7 @@ main(int argc, char *argv[])
 
     if (opt_server)
     {
-        if (!server_start(opt_config, opt_data))
+        if (!server_start(opt_config, opt_data, SERVER_FLAG_USE_CONFIG_FILE))
             goto exit;
     }
 

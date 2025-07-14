@@ -40,6 +40,9 @@ struct _ClipporClientClass
         ClipporClient *self, ClipporEntry *entry,
         ClipporSelectionType selection, gboolean update, GError **error
     );
+    gboolean (*owns_selection)(
+        ClipporClient *self, ClipporSelectionType selection
+    );
 };
 
 GPtrArray *clippor_client_get_mime_types(
@@ -52,4 +55,7 @@ ClipporData *clippor_client_get_data(
 gboolean clippor_client_set_entry(
     ClipporClient *self, ClipporEntry *entry, ClipporSelectionType selection,
     gboolean update, GError **error
+);
+gboolean clippor_client_owns_selection(
+    ClipporClient *self, ClipporSelectionType selection
 );

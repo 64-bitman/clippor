@@ -82,6 +82,9 @@ util_receive_data(int32_t fd, int timeout, gboolean checksum, GError **error)
     ssize_t r = 0;
     gboolean err = FALSE;
 
+    // Shut up compiler warning
+    g_assert(bytes != NULL);
+
     // Only poll before reading when we first start, then we do non-blocking
     // reads and check for EAGAIN or EINTR to signal to poll again.
     goto poll_data;
@@ -225,7 +228,7 @@ clippor_data_new(gboolean do_checksum)
 }
 
 ClipporData *
-clippor_data_new_take(gpointer data, size_t size, gboolean do_checksum)
+clippor_data_new_take(gconstpointer data, size_t size, gboolean do_checksum)
 {
     ClipporData *new = clippor_data_new(do_checksum);
 
@@ -297,4 +300,15 @@ clippor_data_get_checksum(ClipporData *self)
     g_assert(self->checksum != NULL);
 
     return g_checksum_get_string(self->checksum);
+}
+
+int
+clippor_data_compare(ClipporData *data1, ClipporData *data2)
+{
+    g_assert(data1 != NULL);
+    g_assert(data2 != NULL);
+    g_assert(data1->bytes != NULL);
+    g_assert(data2->bytes != NULL);
+
+    return g_bytes_compare(data1->bytes, data2->bytes);
 }

@@ -239,6 +239,9 @@ clippor_entry_get_mime_types(ClipporEntry *self)
     return self->mime_types;
 }
 
+/*
+ * Creates a new reference to the client else NULL if it doesn't exist.
+ */
 ClipporClient *
 clippor_entry_is_from(ClipporEntry *self)
 {
@@ -410,7 +413,13 @@ clippor_entry_get_data(
         data = database_get_entry_mime_type_data(self, mime_type, error);
 
         if (data == NULL)
+        {
+            g_prefix_error(
+                error,
+                "Failed getting entry data for mime type '%s': ", mime_type
+            );
             return NULL;
+        }
 
         g_hash_table_insert(self->mime_types, g_strdup(mime_type), data);
         return clippor_data_ref(data);

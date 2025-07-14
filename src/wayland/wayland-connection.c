@@ -1099,7 +1099,8 @@ wayland_data_offer_destroy(WaylandDataOffer *offer)
     }
     uint32_t id = wl_proxy_get_id(offer->proxy);
 
-    g_hash_table_remove(pending_offers, GUINT_TO_POINTER(id));
+    if (pending_offers != NULL)
+        g_hash_table_remove(pending_offers, GUINT_TO_POINTER(id));
     g_ptr_array_unref(offer->mime_types);
     g_free(offer);
 }

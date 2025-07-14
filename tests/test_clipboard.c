@@ -1,8 +1,9 @@
+#include "clippor-client.h"
 #include "clippor-clipboard.h"
+#include "clippor-entry.h"
 #include "database.h"
 #include "server.h"
-#include "spawn.h"
-#include "util.h"
+#include "test.h"
 #include <glib.h>
 #include <locale.h>
 
@@ -13,8 +14,7 @@ static void
 test_clipboard_start(void)
 {
 
-    ServerInstance *server = run_server(
-        "clipboard",
+    server_instance_start(
         "dbus_service = false\n"
         "[[clipboards]]\n"
         "clipboard = \"Default\"\n"
@@ -73,84 +73,7 @@ test_clipboard_start(void)
     g_assert_nonnull(group);
     g_assert_cmpint(group->len, ==, 4);
 
-    g_assert_true(stop_server(server));
-}
-
-/*
- * Compare if two entries are the same
- */
-static void
-cmp_entry(ClipporEntry *entry, ClipporEntry *entry2)
-{
-    GError *error = NULL;
-
-    g_assert_cmpstr(
-        clippor_entry_get_id(entry2), ==, clippor_entry_get_id(entry)
-    );
-    g_assert_cmpint(
-        clippor_entry_get_creation_time(entry2), ==,
-        clippor_entry_get_creation_time(entry)
-    );
-    g_assert_cmpint(
-        clippor_entry_get_last_used_time(entry2), ==,
-        clippor_entry_get_last_used_time(entry)
-    );
-    g_assert_cmpint(
-        clippor_entry_is_starred(entry2), ==, clippor_entry_is_starred(entry)
-    );
-
-    GHashTable *d_mime_types = clippor_entry_get_mime_types(entry2);
-    GHashTable *mime_types = clippor_entry_get_mime_types(entry);
-
-    GHashTableIter iter;
-    const char *mime_type;
-
-    g_hash_table_iter_init(&iter, d_mime_types);
-
-    while (g_hash_table_iter_next(&iter, (gpointer *)&mime_type, NULL))
-        g_assert_true(g_hash_table_contains(mime_types, mime_type));
-
-    g_autoptr(ClipporData) d_data = NULL, data = NULL;
-
-    d_data = clippor_entry_get_data(entry2, "text/plain", &error);
-    g_assert_no_error(error);
-    data = clippor_entry_get_data(entry, "text/plain", &error);
-    g_assert_no_error(error);
-
-    size_t d_sz, sz;
-    const char *d_raw, *raw;
-
-    d_raw = clippor_data_get_data(d_data, &d_sz);
-    raw = clippor_data_get_data(data, &sz);
-
-    g_autofree char *d_str = NULL, *str = NULL;
-
-    d_str = g_strdup_printf("%.*s", (int)d_sz, d_raw);
-    str = g_strdup_printf("%.*s", (int)sz, raw);
-
-    g_assert_cmpstr(d_str, ==, str);
-}
-
-/*
- * Return allocated string of entry data for mime type
- */
-static char *
-get_entry_contents(ClipporEntry *entry, const char *mime_type)
-{
-
-    GError *error = NULL;
-    g_autoptr(ClipporData) data = NULL;
-
-    g_assert_no_error(error);
-    data = clippor_entry_get_data(entry, mime_type, &error);
-    g_assert_no_error(error);
-
-    size_t sz;
-    const char *raw;
-
-    raw = clippor_data_get_data(data, &sz);
-
-    return g_strdup_printf("%.*s", (int)sz, raw);
+    server_instance_stop();
 }
 
 /*
@@ -158,25 +81,26 @@ get_entry_contents(ClipporEntry *entry, const char *mime_type)
  * connection
  */
 static void
-test_clipboard_new_entry_single(void)
+test_clipboard_history_simple(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "max_entries = 10\n"
-                                      "max_entries_memory = 5\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = true\n";
-
     WaylandCompositor *wc = wayland_compositor_start();
 
-    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 10\n"
+        "max_entries_memory = 5\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = true\n",
+        wc->display
+    );
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     GError *error = NULL;
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
@@ -186,39 +110,50 @@ test_clipboard_new_entry_single(void)
     // Check if both regular and selections are synced
     for (int i = 0; i < 2; i++)
     {
-
         g_autofree char *copy = g_strdup_printf("TEST %d", i);
-        wl_copy(wc, i, copy);
+        wl_copy(wc, i, "text/plain", copy);
 
-        g_autoptr(ClipporEntry) entry = NULL;
+        server_instance_dispatch();
 
-        assert_wait(
-            (entry = clippor_clipboard_get_entry(cb, i, NULL)), != NULL,
-            nonnull, 3000
-        );
+        g_autoptr(ClipporEntry) entry =
+            clippor_clipboard_get_entry(cb, i, &error);
+        g_assert_no_error(error);
 
         g_assert_true(
             database_entry_id_exists(clippor_entry_get_id(entry), &error) == 0
         );
         g_assert_no_error(error);
 
+        // Test if database is OK
         g_autoptr(ClipporEntry) d_entry =
             database_get_entry_by_id(cb, clippor_entry_get_id(entry), &error);
         g_assert_no_error(error);
 
         cmp_entry(entry, d_entry);
 
-        g_autofree char *paste = NULL;
+        // Run the server so it can serve the clipboard
+        server_instance_run();
 
         // Check if opposite selection is the same
-        paste = wl_paste(wc, !i, FALSE, "text/plain");
+        g_autofree char *paste = wl_paste(wc, !i, FALSE, "text/plain");
 
         g_assert_cmpstr(paste, ==, copy);
+
+        // Check if selection is still owned by the wl-copy process
+        ClipporClient *client = clippor_entry_is_from(entry);
+
+        g_assert_nonnull(client);
+        g_assert_false(clippor_client_owns_selection(
+            client, i == 0 ? CLIPPOR_SELECTION_TYPE_REGULAR
+                           : CLIPPOR_SELECTION_TYPE_PRIMARY
+        ));
+        g_object_unref(client);
+
+        server_instance_pause();
     }
 
-    g_free(config_contents);
+    server_instance_stop();
     wayland_compositor_stop(wc);
-    g_assert_true(stop_server(server));
 }
 
 /*
@@ -226,41 +161,61 @@ test_clipboard_new_entry_single(void)
  * connections
  */
 static void
-test_clipboard_new_entry_multi(void)
+test_clipboard_history_multiple_connections(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "max_entries = 10\n"
-                                      "max_entries_memory = 5\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = true\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = false\n";
 
     WaylandCompositor *wc = wayland_compositor_start();
     WaylandCompositor *wc2 = wayland_compositor_start();
 
-    char *config_contents =
-        g_strdup_printf(config_contents_fmt, wc->display, wc2->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 10\n"
+        "max_entries_memory = 5\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = true\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = false\n",
+        wc->display, wc2->display
+    );
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    GError *error = NULL;
+    ClipporEntry *entry;
+    ClipporClient *client;
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
     char *contents;
 
-    wl_copy(wc, FALSE, "TEST 1");
+    wl_copy(wc, FALSE, "text/plain", "TEST 1");
+
+    server_instance_dispatch();
+
+    entry = clippor_clipboard_get_entry(cb, 0, &error);
+    g_assert_no_error(error);
+
+    client = clippor_entry_is_from(entry);
+    g_assert_nonnull(client);
+
+    g_assert_false(
+        clippor_client_owns_selection(client, CLIPPOR_SELECTION_TYPE_REGULAR)
+    );
+
+    g_object_unref(client);
+
+    server_instance_run();
 
     g_assert_cmpstr(
         (contents = wl_paste(wc, FALSE, FALSE, "text/plain")), ==, "TEST 1"
@@ -279,9 +234,28 @@ test_clipboard_new_entry_multi(void)
     );
     g_free(contents);
 
-    wl_copy(wc2, FALSE, "TEST 2");
+    server_instance_pause();
 
-    g_usleep(100 * 1000);
+    wl_copy(wc2, FALSE, "text/plain", "TEST 2");
+
+    server_instance_dispatch();
+
+    entry = clippor_clipboard_get_entry(cb, 0, &error);
+    g_assert_no_error(error);
+
+    ClipporClient *old_client = client;
+    client = clippor_entry_is_from(entry);
+    g_assert_nonnull(client);
+    g_assert_true(client != old_client);
+
+    g_assert_false(
+        clippor_client_owns_selection(client, CLIPPOR_SELECTION_TYPE_REGULAR)
+    );
+
+    g_object_unref(client);
+
+    server_instance_run();
+
     g_assert_cmpstr(
         (contents = wl_paste(wc, FALSE, FALSE, "text/plain")), ==, "TEST 2"
     );
@@ -299,60 +273,73 @@ test_clipboard_new_entry_multi(void)
     );
     g_free(contents);
 
-    wl_copy(wc2, TRUE, "TEST 2");
+    server_instance_pause();
+
+    wl_copy(wc2, TRUE, "text/plain", "TEST 2");
+
+    server_instance_dispatch_and_run();
 
     g_assert_cmpstr(
         (contents = wl_paste(wc, FALSE, FALSE, "text/plain")), ==, "TEST 2"
     );
     g_free(contents);
 
-    g_free(config_contents);
+    server_instance_pause();
+
+    server_instance_stop();
     wayland_compositor_stop(wc);
     wayland_compositor_stop(wc2);
-    g_assert_true(stop_server(server));
 }
 
 /*
- * Test if an existing selection is correctly received on startup
+ * Test if an existing selection is correctly received on startup and that
+ * clippor does not immediately set the selection.
  */
 static void
-test_clipboard_new_entry_pre(void)
+test_clipboard_history_startup(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "max_entries = 10\n"
-                                      "max_entries_memory = 5\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = true\n";
-
     WaylandCompositor *wc = wayland_compositor_start();
 
-    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 10\n"
+        "max_entries_memory = 5\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = true\n",
+        wc->display
+    );
 
-    wl_copy(wc, FALSE, "TEST");
+    wl_copy(wc, FALSE, "text/plain", "TEST");
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
 
     g_autoptr(ClipporEntry) entry = NULL;
 
-    assert_wait(
-        (entry = clippor_clipboard_get_entry(cb, 0, NULL)), != NULL, nonnull,
-        3000
-    );
+    // For some reason sometimes entry is NULL so just dispatch until its we get
+    // the entry.
+    while ((entry = clippor_clipboard_get_entry(cb, 0, NULL)) == NULL)
+        server_instance_dispatch();
 
     g_autofree char *copy = get_entry_contents(entry, "text/plain");
 
     g_assert_cmpstr(copy, ==, "TEST");
 
-    g_free(config_contents);
-    g_assert_true(stop_server(server));
+    g_autoptr(ClipporClient) client = clippor_entry_is_from(entry);
+
+    g_assert_nonnull(client);
+    g_assert_false(
+        clippor_client_owns_selection(client, CLIPPOR_SELECTION_TYPE_REGULAR)
+    );
+
+    server_instance_stop();
     wayland_compositor_stop(wc);
 }
 
@@ -363,23 +350,24 @@ test_clipboard_new_entry_pre(void)
 static void
 test_clipboard_history_trim(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "max_entries = 10\n"
-                                      "max_entries_memory = 5\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = false\n";
-
     WaylandCompositor *wc = wayland_compositor_start();
 
-    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 10\n"
+        "max_entries_memory = 5\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = false\n",
+        wc->display
+    );
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     GError *error = NULL;
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
@@ -388,12 +376,10 @@ test_clipboard_history_trim(void)
 
     for (int i = 0; i < 15; i++)
     {
-        g_autofree char *copy = g_strdup_printf("TEST %d", i);
-
-        wl_copy(wc, FALSE, copy);
+        wl_copy(wc, FALSE, "text/plain", "TEST %d", i);
+        server_instance_dispatch();
     }
 
-    g_usleep(100 * 1000);
     for (int i = 0; i < 10; i++)
     {
         g_autofree char *copy = g_strdup_printf("TEST %d", 14 - i);
@@ -423,8 +409,7 @@ test_clipboard_history_trim(void)
     g_assert_no_error(error);
     g_assert_cmpint(num, ==, 10);
 
-    g_free(config_contents);
-    g_assert_true(stop_server(server));
+    server_instance_stop();
     wayland_compositor_stop(wc);
 }
 
@@ -434,46 +419,43 @@ test_clipboard_history_trim(void)
 static void
 test_clipboard_history_starred(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "max_entries = 5\n"
-                                      "max_entries_memory = 2\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = false\n";
-
     WaylandCompositor *wc = wayland_compositor_start();
 
-    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 5\n"
+        "max_entries_memory = 2\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = false\n",
+        wc->display
+    );
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     GError *error = NULL;
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
-    wl_copy(wc, FALSE, "TEST STARRED");
+    wl_copy(wc, FALSE, "text/plain", "TEST STARRED");
 
-    g_autoptr(ClipporEntry) entry = NULL;
+    server_instance_dispatch();
 
-    assert_wait(
-        (entry = clippor_clipboard_get_entry(cb, 0, NULL)), != NULL, nonnull,
-        3000
-    );
+    g_autoptr(ClipporEntry) entry = clippor_clipboard_get_entry(cb, 0, NULL);
 
     clippor_entry_update_property(entry, &error, "starred", TRUE);
     g_assert_no_error(error);
 
     for (int i = 0; i < 7; i++)
     {
-        g_autofree char *copy = g_strdup_printf("TEST %d", i);
-
-        wl_copy(wc, FALSE, copy);
+        wl_copy(wc, FALSE, "text/plain", "TEST %d", i);
+        server_instance_dispatch();
     }
 
     g_autoptr(ClipporEntry) d_entry = clippor_clipboard_get_entry_by_id(
@@ -483,8 +465,7 @@ test_clipboard_history_starred(void)
 
     cmp_entry(entry, d_entry);
 
-    g_free(config_contents);
-    g_assert_true(stop_server(server));
+    server_instance_stop();
     wayland_compositor_stop(wc);
 }
 
@@ -494,38 +475,36 @@ test_clipboard_history_starred(void)
 static void
 test_clipboard_history_persists(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "max_entries = 5\n"
-                                      "max_entries_memory = 2\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = false\n";
-
     WaylandCompositor *wc = wayland_compositor_start();
 
-    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 5\n"
+        "max_entries_memory = 2\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = false\n",
+        wc->display
+    );
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
-    wl_copy(wc, FALSE, "TEST");
+    wl_copy(wc, FALSE, "text/plain", "TEST");
 
-    g_autoptr(ClipporEntry) entry = NULL;
+    server_instance_dispatch();
 
-    assert_wait(
-        (entry = clippor_clipboard_get_entry(cb, 0, NULL)), != NULL, nonnull,
-        3000
-    );
+    g_autoptr(ClipporEntry) entry = clippor_clipboard_get_entry(cb, 0, NULL);
 
-    g_assert_true(restart_server(server));
+    server_instance_restart();
 
     cb = server_get_clipboards()->pdata[0];
     g_autoptr(ClipporEntry) d_entry = clippor_clipboard_get_entry(cb, 0, NULL);
@@ -534,53 +513,52 @@ test_clipboard_history_persists(void)
 
     cmp_entry(entry, d_entry);
 
-    g_free(config_contents);
+    server_instance_stop();
     wayland_compositor_stop(wc);
-    g_assert_true(stop_server(server));
 }
 
 /*
  * Test if multiple clipboards behave correctly (i.e. not get mixed up).
  */
 static void
-test_clipboard_history_multi(void)
+test_clipboard_history_multiple_clipboards(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"one\"\n"
-                                      "max_entries = 5\n"
-                                      "max_entries_memory = 2\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"two\"\n"
-                                      "max_entries = 5\n"
-                                      "max_entries_memory = 2\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[[wayland_displays.seats]]\n"
-                                      "seat = \".*\"\n"
-                                      "clipboard = \"one\"\n"
-                                      "regular = true\n"
-                                      "primary = false\n"
-                                      "[[wayland_displays.seats]]\n"
-                                      "seat = \".*\"\n"
-                                      "clipboard = \"two\"\n"
-                                      "regular = false\n"
-                                      "primary = true\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[[wayland_displays.seats]]\n"
-                                      "seat = \".*\"\n"
-                                      "clipboard = \"one\"\n"
-                                      "regular = true\n"
-                                      "primary = true\n";
-
     WaylandCompositor *wc = wayland_compositor_start();
     WaylandCompositor *wc2 = wayland_compositor_start();
 
-    char *config_contents =
-        g_strdup_printf(config_contents_fmt, wc->display, wc2->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"one\"\n"
+        "max_entries = 5\n"
+        "max_entries_memory = 2\n"
+        "[[clipboards]]\n"
+        "clipboard = \"two\"\n"
+        "max_entries = 5\n"
+        "max_entries_memory = 2\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[[wayland_displays.seats]]\n"
+        "seat = \".*\"\n"
+        "clipboard = \"one\"\n"
+        "regular = true\n"
+        "primary = false\n"
+        "[[wayland_displays.seats]]\n"
+        "seat = \".*\"\n"
+        "clipboard = \"two\"\n"
+        "regular = false\n"
+        "primary = true\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[[wayland_displays.seats]]\n"
+        "seat = \".*\"\n"
+        "clipboard = \"one\"\n"
+        "regular = true\n"
+        "primary = true\n",
+        wc->display, wc2->display
+    );
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     ClipporClipboard *cb1 = server_get_clipboards()->pdata[0];
     ClipporClipboard *cb2 = server_get_clipboards()->pdata[1];
@@ -588,20 +566,16 @@ test_clipboard_history_multi(void)
     g_assert_null(clippor_clipboard_get_entry(cb1, 0, NULL));
     g_assert_null(clippor_clipboard_get_entry(cb2, 0, NULL));
 
-    wl_copy(wc, FALSE, "ONE REGULAR");
-    wl_copy(wc, TRUE, "TWO PRIMARY");
+    wl_copy(wc, FALSE, "text/plain", "ONE REGULAR");
+    server_instance_dispatch();
+    wl_copy(wc, TRUE, "text/plain", "TWO PRIMARY");
+    server_instance_dispatch();
 
     g_autoptr(ClipporEntry) entry1 = NULL, entry2 = NULL, entry3 = NULL,
                             entry4 = NULL;
 
-    assert_wait(
-        (entry1 = clippor_clipboard_get_entry(cb1, 0, NULL)), != NULL, nonnull,
-        3000
-    );
-    assert_wait(
-        (entry2 = clippor_clipboard_get_entry(cb2, 0, NULL)), != NULL, nonnull,
-        3000
-    );
+    entry1 = clippor_clipboard_get_entry(cb1, 0, NULL);
+    entry2 = clippor_clipboard_get_entry(cb2, 0, NULL);
 
     char *cb1_contents = get_entry_contents(entry1, "text/plain");
     char *cb2_contents = get_entry_contents(entry2, "text/plain");
@@ -611,27 +585,27 @@ test_clipboard_history_multi(void)
     g_free(cb1_contents);
     g_free(cb2_contents);
 
-    wl_copy(wc2, FALSE, "ONE REGULAR2");
+    wl_copy(wc2, FALSE, "text/plain", "ONE REGULAR2");
 
-    // Must sleep because using assert_wait will return immediately becuase
-    // index 0 still refers to the previous entry.
-    g_usleep(100 * 1000);
+    server_instance_dispatch();
+
     entry3 = clippor_clipboard_get_entry(cb1, 0, NULL);
     cb1_contents = get_entry_contents(entry3, "text/plain");
 
     g_assert_cmpstr(cb1_contents, ==, "ONE REGULAR2");
     g_free(cb1_contents);
 
-    wl_copy(wc2, TRUE, "ONE PRIMARY2");
+    wl_copy(wc2, TRUE, "text/plain", "ONE PRIMARY2");
 
-    g_usleep(100 * 1000);
+    server_instance_dispatch();
+
     entry4 = clippor_clipboard_get_entry(cb1, 0, NULL);
     cb1_contents = get_entry_contents(entry4, "text/plain");
 
     g_assert_cmpstr(cb1_contents, ==, "ONE PRIMARY2");
     g_free(cb1_contents);
 
-    g_assert_true(restart_server(server));
+    server_instance_restart();
 
     // Check if they are correctly stored in database
     cb1 = server_get_clipboards()->pdata[0];
@@ -650,8 +624,7 @@ test_clipboard_history_multi(void)
     cmp_entry(entry3, d_entry2);
     cmp_entry(entry1, d_entry3);
 
-    g_free(config_contents);
-    g_assert_true(stop_server(server));
+    server_instance_stop();
     wayland_compositor_stop(wc);
     wayland_compositor_stop(wc2);
 }
@@ -665,46 +638,53 @@ test_clipboard_history_multi(void)
 static void
 test_clipboard_history_own_on_clear(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "max_entries = 5\n"
-                                      "max_entries_memory = 2\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = false\n";
-
     WaylandCompositor *wc = wayland_compositor_start();
 
-    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 5\n"
+        "max_entries_memory = 2\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = false\n",
+        wc->display
+    );
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
-    wl_copy(wc, FALSE, "TEST");
-    wl_copy(wc, TRUE, "TESTP");
+    wl_copy(wc, FALSE, "text/plain", "TEST");
+    server_instance_dispatch();
+    wl_copy(wc, TRUE, "text/plain", "TESTP");
+    server_instance_dispatch();
 
-    g_usleep(100 * 1000);
+    g_autoptr(ClipporEntry) entry = clippor_clipboard_get_entry(cb, 0, NULL);
+    g_assert_nonnull(entry);
 
-    wl_copy(wc, FALSE, NULL);
-    wl_copy(wc, TRUE, NULL);
+    wl_copy(wc, FALSE, NULL, NULL);
+    server_instance_dispatch();
+    wl_copy(wc, TRUE, NULL, NULL);
+    server_instance_dispatch();
 
-    g_usleep(100 * 1000);
+    server_instance_run();
 
     g_autofree char *paste = wl_paste(wc, FALSE, FALSE, "text/plain");
+
+    server_instance_pause();
 
     g_assert_null(wl_paste(wc, TRUE, FALSE, "text/plain"));
     g_assert_cmpstr(paste, ==, "TEST");
 
-    g_free(config_contents);
+    server_instance_stop();
     wayland_compositor_stop(wc);
-    g_assert_true(stop_server(server));
 }
 
 /*
@@ -713,34 +693,36 @@ test_clipboard_history_own_on_clear(void)
 static void
 test_clipboard_history_remove(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "max_entries = 3\n"
-                                      "max_entries_memory = 1\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = false\n";
-
     WaylandCompositor *wc = wayland_compositor_start();
 
-    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 3\n"
+        "max_entries_memory = 1\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = false\n",
+        wc->display
+    );
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     GError *error = NULL;
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
-    wl_copy(wc, FALSE, "MEMORY");
-    wl_copy(wc, FALSE, "DATABASE STARRED");
-    wl_copy(wc, FALSE, "DATABASE");
-
-    g_usleep(100 * 1000);
+    wl_copy(wc, FALSE, "text/plain", "MEMORY");
+    server_instance_dispatch();
+    wl_copy(wc, FALSE, "text/plain", "DATABASE STARRED");
+    server_instance_dispatch();
+    wl_copy(wc, FALSE, "text/plain", "DATABASE");
+    server_instance_dispatch();
 
     ClipporEntry *entry = clippor_clipboard_get_entry(cb, 0, &error);
 
@@ -758,8 +740,7 @@ test_clipboard_history_remove(void)
     g_assert_cmpint(database_get_num_entries(cb, &error), ==, 2);
     g_assert_no_error(error);
 
-    g_free(config_contents);
-    g_assert_true(stop_server(server));
+    server_instance_stop();
     wayland_compositor_stop(wc);
 }
 
@@ -769,6 +750,48 @@ test_clipboard_history_remove(void)
 static void
 test_clipboard_history_clear(void)
 {
+    WaylandCompositor *wc = wayland_compositor_start();
+
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 5\n"
+        "max_entries_memory = 2\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = true\n",
+        wc->display
+    );
+
+    server_instance_start(config_contents);
+
+    GError *error = NULL;
+    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+
+    g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
+
+    for (int i = 0; i < 5; i++)
+    {
+        wl_copy(wc, i % 2, "text/plain", "TEST %d", i);
+        server_instance_dispatch();
+    }
+
+    g_assert_cmpint(database_get_num_entries(cb, &error), ==, 5);
+
+    clippor_clipboard_clear_history(cb, &error);
+    g_assert_no_error(error);
+
+    g_assert_cmpint(database_get_num_entries(cb, &error), ==, 0);
+    g_assert_no_error(error);
+
+    g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
+
+    server_instance_stop();
+    wayland_compositor_stop(wc);
 }
 
 /*
@@ -777,51 +800,52 @@ test_clipboard_history_clear(void)
 static void
 test_clipboard_filter_allowed_mime_types(void)
 {
-    const char *config_contents_fmt = "dbus_service = false\n"
-                                      "[[clipboards]]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "max_entries = 5\n"
-                                      "max_entries_memory = 2\n"
-                                      "allowed_mime_types = [ \"text/.*\" ]\n"
-                                      "[[wayland_displays]]\n"
-                                      "display = \"%s\"\n"
-                                      "[wayland_displays.seats]\n"
-                                      "clipboard = \"Default\"\n"
-                                      "regular = true\n"
-                                      "primary = true\n";
-
     WaylandCompositor *wc = wayland_compositor_start();
 
-    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 5\n"
+        "max_entries_memory = 2\n"
+        "allowed_mime_types = [ \"text/.*\" ]\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = true\n",
+        wc->display
+    );
 
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
+    GError *error = NULL;
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
-    g_autoptr(ClipporEntry) entry = NULL;
+    wl_copy(wc, FALSE, NULL, "TEST");
 
-    wl_copy(wc, FALSE, "TEST");
+    server_instance_dispatch();
 
-    assert_wait(
-        (entry = clippor_clipboard_get_entry(cb, 0, NULL)), != NULL, nonnull,
-        3000
-    );
+    g_autoptr(ClipporEntry) entry = clippor_clipboard_get_entry(cb, 0, &error);
+    g_assert_no_error(error);
 
     GHashTable *mime_types = clippor_entry_get_mime_types(entry);
 
     g_assert_cmpint(g_hash_table_size(mime_types), ==, 2);
 
-    g_free(config_contents);
+    server_instance_stop();
     wayland_compositor_stop(wc);
-    g_assert_true(stop_server(server));
 }
 
 static void
 test_clipboard_filter_mime_type_groups(void)
 {
-    const char *config_contents_fmt =
+    WaylandCompositor *wc = wayland_compositor_start();
+
+    g_autofree char *config_contents = g_strdup_printf(
         "dbus_service = false\n"
         "[[clipboards]]\n"
         "clipboard = \"Default\"\n"
@@ -836,33 +860,27 @@ test_clipboard_filter_mime_type_groups(void)
         "[wayland_displays.seats]\n"
         "clipboard = \"Default\"\n"
         "regular = true\n"
-        "primary = true\n";
+        "primary = true\n",
+        wc->display
+    );
 
-    WaylandCompositor *wc = wayland_compositor_start();
-
-    char *config_contents = g_strdup_printf(config_contents_fmt, wc->display);
-
-    ServerInstance *server = run_server("clipboard", config_contents);
+    server_instance_start(config_contents);
 
     ClipporClipboard *cb = server_get_clipboards()->pdata[0];
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
-    g_autoptr(ClipporEntry) entry = NULL;
+    wl_copy(wc, FALSE, "text/plain;charset=utf-8", "test");
 
-    wl_copy(wc, FALSE, "test");
+    server_instance_dispatch();
 
-    assert_wait(
-        (entry = clippor_clipboard_get_entry(cb, 0, NULL)), != NULL, nonnull,
-        3000
-    );
+    g_autoptr(ClipporEntry) entry = clippor_clipboard_get_entry(cb, 0, NULL);
 
     GHashTable *mime_types = clippor_entry_get_mime_types(entry);
 
     g_assert_cmpint(g_hash_table_size(mime_types), ==, 5);
 
-    g_free(config_contents);
-    g_assert_true(stop_server(server));
+    server_instance_stop();
     wayland_compositor_stop(wc);
 }
 
@@ -872,17 +890,20 @@ main(int argc, char **argv)
     setlocale(LC_ALL, "");
     g_test_init(&argc, &argv, NULL);
 
+    pre_startup();
+
     struct sigaction sa;
     set_signal_handler(&sa);
 
     g_test_add_func("/clipboard/start", test_clipboard_start);
+    g_test_add_func("/clipboard/history/simple", test_clipboard_history_simple);
     g_test_add_func(
-        "/clipboard/new-entry/single", test_clipboard_new_entry_single
+        "/clipboard/history/multiple-connections",
+        test_clipboard_history_multiple_connections
     );
     g_test_add_func(
-        "/clipboard/new-entry/multi", test_clipboard_new_entry_multi
+        "/clipboard/history/startup", test_clipboard_history_startup
     );
-    g_test_add_func("/clipboard/new-entry/pre", test_clipboard_new_entry_pre);
     g_test_add_func("/clipboard/history/trim", test_clipboard_history_trim);
     g_test_add_func(
         "/clipboard/history/starred", test_clipboard_history_starred
@@ -890,7 +911,10 @@ main(int argc, char **argv)
     g_test_add_func(
         "/clipboard/history/persists", test_clipboard_history_persists
     );
-    g_test_add_func("/clipboard/history/multi", test_clipboard_history_multi);
+    g_test_add_func(
+        "/clipboard/history/multiple-clipboards",
+        test_clipboard_history_multiple_clipboards
+    );
     g_test_add_func(
         "/clipboard/history/own-on-clear", test_clipboard_history_own_on_clear
     );

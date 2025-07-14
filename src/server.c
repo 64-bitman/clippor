@@ -17,7 +17,7 @@ static GPtrArray *WAYLAND_CONNECTIONS;
 
 static Config *CONFIG;
 
-static gboolean RUNNING = FALSE;
+static uint SIGNAL_SOURCE_TAGS[2];
 
 static void
 wayland_connections_free_func(GWeakRef *ref)
@@ -35,13 +35,14 @@ wayland_connections_free_func(GWeakRef *ref)
     g_free(ref);
 }
 
-static void
-server_free(void)
+void
+server_free(uint flags)
 {
-    if (!RUNNING)
-        return;
+    for (uint i = 0; i < G_N_ELEMENTS(SIGNAL_SOURCE_TAGS); i++)
+        g_source_remove(SIGNAL_SOURCE_TAGS[i]);
 
-    g_main_loop_unref(MAIN_LOOP);
+    if (MAIN_LOOP != NULL)
+        g_clear_pointer(&MAIN_LOOP, g_main_loop_unref);
 
     wayland_connection_free_static();
     g_ptr_array_unref(WAYLAND_CONNECTIONS);
@@ -49,15 +50,19 @@ server_free(void)
 
     config_free(CONFIG);
     dbus_server_uninit();
-    database_uninit();
-    RUNNING = FALSE;
+
+    if (!(flags & SERVER_FLAG_NO_UNINIT_DB))
+        database_uninit();
 }
 
 static gboolean
 on_exit_signal(gpointer user_data G_GNUC_UNUSED)
 {
     g_main_loop_quit(MAIN_LOOP);
+    g_main_context_unref(MAIN_CONTEXT);
+
     g_info("Exiting...");
+
     return G_SOURCE_REMOVE;
 }
 
@@ -181,19 +186,26 @@ server_set_config(void)
 }
 
 gboolean
-server_start(const char *config_file, const char *data_directory)
+server_start(const char *config_value, const char *data_directory, uint flags)
 {
-    if (RUNNING)
-        return FALSE;
+    if (MAIN_CONTEXT == NULL)
+        MAIN_CONTEXT = g_main_context_ref(g_main_context_default());
 
-    MAIN_CONTEXT = g_main_context_default();
-    MAIN_LOOP = g_main_loop_new(MAIN_CONTEXT, FALSE);
+    if (!(flags & SERVER_FLAG_MANUAL))
+        MAIN_LOOP = g_main_loop_new(MAIN_CONTEXT, FALSE);
+
+    SIGNAL_SOURCE_TAGS[0] = g_unix_signal_add(SIGINT, on_exit_signal, NULL);
+    SIGNAL_SOURCE_TAGS[1] = g_unix_signal_add(SIGTERM, on_exit_signal, NULL);
 
     GError *error = NULL;
 
-    if ((CONFIG = config_init(config_file, &error)) == NULL)
+    gboolean config_is_file = flags & SERVER_FLAG_USE_CONFIG_FILE;
+    gboolean no_db = flags & SERVER_FLAG_NO_INIT_DB;
+    gboolean db_in_memory = flags & SERVER_FLAG_DB_IN_MEMORY;
+
+    if ((CONFIG = config_init(config_value, config_is_file, &error)) == NULL)
         goto fail;
-    if (!database_init(data_directory, &error))
+    if (!no_db && !database_init(data_directory, db_in_memory, &error))
         goto fail;
     if (CONFIG->dbus_service &&
         !dbus_service_init(&error, CONFIG->dbus_timeout))
@@ -206,14 +218,12 @@ server_start(const char *config_file, const char *data_directory)
 
     server_set_config();
 
-    g_unix_signal_add(SIGINT, on_exit_signal, NULL);
-    g_unix_signal_add(SIGTERM, on_exit_signal, NULL);
+    if (!(flags & SERVER_FLAG_MANUAL))
+    {
+        g_main_loop_run(MAIN_LOOP);
 
-    RUNNING = TRUE;
-
-    g_main_loop_run(MAIN_LOOP);
-
-    server_free();
+        server_free(SERVER_FLAG_NONE);
+    }
 
     return TRUE;
 fail:
@@ -237,8 +247,20 @@ server_get_clipboards(void)
     return CLIPBOARDS;
 }
 
-gboolean
-server_is_running(void)
+/*
+ * Pass NULL to use global default context when calling server_start(). Creates
+ * a new reference to the passed context.
+ */
+void
+server_set_main_context(GMainContext *context)
 {
-    return RUNNING;
+    if (MAIN_CONTEXT != NULL)
+        g_main_context_unref(MAIN_CONTEXT);
+    MAIN_CONTEXT = g_main_context_ref(context);
+}
+
+GMainContext *
+server_get_main_context(void)
+{
+    return MAIN_CONTEXT;
 }

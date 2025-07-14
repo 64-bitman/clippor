@@ -94,18 +94,24 @@ clippor_client_set_entry(
 
     ClipporClientClass *class = CLIPPOR_CLIENT_GET_CLASS(self);
 
-    /* if (entry != NULL) */
-    /* { */
-    /*     GHashTableIter iter; */
-
-    /*     g_hash_table_iter_init(&iter, clippor_entry_get_mime_types(entry)); */
-
-    /*     // No point in setting selection if there are no mime types in entry */
-    /*     if (!update && !g_hash_table_iter_next(&iter, NULL, NULL)) */
-    /*         return TRUE; */
-    /* } */
-
     return class->set_entry == NULL
                ? FALSE
                : class->set_entry(self, entry, selection, update, error);
+}
+
+/*
+ * Checks if client owns the selection
+ */
+gboolean
+clippor_client_owns_selection(
+    ClipporClient *self, ClipporSelectionType selection
+)
+{
+    g_assert(CLIPPOR_IS_CLIENT(self));
+    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
+
+    ClipporClientClass *class = CLIPPOR_CLIENT_GET_CLASS(self);
+
+    return class->set_entry == NULL ? FALSE
+                                    : class->owns_selection(self, selection);
 }

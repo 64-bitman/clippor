@@ -10,7 +10,22 @@
 G_DEFINE_QUARK(database_error_quark, database_error)
 
 static sqlite3 *DB = NULL;
+
+#ifdef DEBUG
+static gboolean DB_IN_MEMORY = FALSE;
+
+// Used in tests to emulate storing data in actual files. Each key is the file
+// path and its value is a GBytes containing the data.
+static GHashTable *DATA_TABLE;
+#endif
+
 static char *STORE_DIR = NULL, *DATA_DIR = NULL;
+
+sqlite3 *
+database_get_db(void)
+{
+    return DB;
+}
 
 #define EXEC_ERROR(ret)                                                        \
     do                                                                         \
@@ -114,11 +129,28 @@ update_database_version(GError **error)
     return TRUE;
 }
 
+/*
+ * If in_memory is TRUE then use an in-memory database and store the data files
+ * as memory objects instead.
+ */
 gboolean
-database_init(const char *data_directory, GError **error)
+database_init(const char *data_directory, gboolean in_memory, GError **error)
 {
     g_assert(error == NULL || *error == NULL);
 
+#ifdef DEBUG
+    DB_IN_MEMORY = in_memory;
+
+    if (in_memory)
+    {
+        // Store data in a hash table to emulate a filesystem.
+        DATA_TABLE = g_hash_table_new_full(
+            g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_bytes_unref
+        );
+        STORE_DIR = NULL;
+        goto open_database;
+    }
+#endif
     if (data_directory == NULL)
     {
         const char *data_dir = g_get_user_data_dir();
@@ -140,7 +172,15 @@ database_init(const char *data_directory, GError **error)
         return FALSE;
     }
 
-    char *db_path = g_strdup_printf("%s/history.sqlite3", STORE_DIR);
+#ifdef DEBUG
+open_database:;
+#endif
+    char *db_path;
+
+    if (in_memory)
+        db_path = g_strdup(":memory:");
+    else
+        db_path = g_strdup_printf("%s/history.sqlite3", STORE_DIR);
 
     int ret = sqlite3_open(db_path, &DB);
     const char *statement;
@@ -205,8 +245,14 @@ database_init(const char *data_directory, GError **error)
 void
 database_uninit(void)
 {
+#ifdef DEBUG
+    if (DATA_TABLE != NULL)
+        g_hash_table_unref(DATA_TABLE);
+#endif
+
     g_free(STORE_DIR);
     g_free(DATA_DIR);
+
     sqlite3_close(DB);
 }
 
@@ -324,23 +370,39 @@ database_ref_data_row(ClipporData *data, GError **error)
 
     STEP_SINGLE(NULL);
 
-    if (g_mkdir_with_parents(DATA_DIR, 0755) == -1)
-    {
-        g_set_error(
-            error, DATABASE_ERROR, DATABASE_ERROR_ADD,
-            "Failed creating directory '%s': %s", DATA_DIR, g_strerror(errno)
-        );
-        return NULL;
-    }
+#ifdef DEBUG
+    if (!DB_IN_MEMORY)
+#endif
+        if (g_mkdir_with_parents(DATA_DIR, 0755) == -1)
+        {
+            g_set_error(
+                error, DATABASE_ERROR, DATABASE_ERROR_ADD,
+                "Failed creating directory '%s': %s", DATA_DIR,
+                g_strerror(errno)
+            );
+            return NULL;
+        }
 
     // Attempt to write to a file it it doesn't exist
     g_autofree char *path = g_strdup_printf("%s/%s", DATA_DIR, data_id);
 
-    if (g_access(path, F_OK) == 0)
-        return data_id;
+#ifdef DEBUG
+    if (!DB_IN_MEMORY)
+#endif
+        if (g_access(path, F_OK) == 0)
+            return data_id;
 
     size_t sz;
     const char *d = clippor_data_get_data(data, &sz);
+
+#ifdef DEBUG
+    if (DB_IN_MEMORY)
+    {
+        g_hash_table_insert(DATA_TABLE, g_strdup(path), g_bytes_new(d, sz));
+
+        return data_id;
+    }
+#endif
 
     if (!g_file_set_contents_full(
             path, d, sz, G_FILE_SET_CONTENTS_CONSISTENT, 0644, error
@@ -599,21 +661,30 @@ database_get_entry_mime_type_data(
 
     if (ret == SQLITE_ROW)
     {
-
         const char *data_id = (const char *)sqlite3_column_text(stmt, 0);
         g_autofree char *path = g_strdup_printf("%s/%s", DATA_DIR, data_id);
 
         sqlite3_finalize(stmt);
 
+#ifdef DEBUG
+        if (DB_IN_MEMORY)
+        {
+            GBytes *bytes = g_hash_table_lookup(DATA_TABLE, path);
+
+            g_assert(bytes != NULL);
+
+            size_t sz;
+            gconstpointer stuff = g_bytes_get_data(bytes, &sz);
+
+            return clippor_data_new_take(stuff, sz, TRUE);
+        }
+#endif
         // Read from data file
         g_autofree char *data;
         size_t sz;
 
         if (!g_file_get_contents(path, &data, &sz, error))
-        {
-            g_prefix_error(error, "Failed reading file '%s': ", path);
             return NULL;
-        }
 
         return clippor_data_new_take(data, sz, TRUE);
     }
@@ -672,7 +743,14 @@ database_unref_data_row(const char *data_id, GError **error)
             // Delete file
             g_autofree char *path = g_strdup_printf("%s/%s", DATA_DIR, data_id);
 
-            g_remove(path);
+#ifdef DEBUG
+            if (DB_IN_MEMORY)
+                g_hash_table_remove(DATA_TABLE, path);
+            else
+#endif
+            {
+                g_remove(path);
+            }
 
             // Delete row
             statement = "DELETE FROM Data WHERE Data_id = ?;";

@@ -94,6 +94,9 @@ static gboolean wayland_seat_client_set_entry(
     ClipporClient *self, ClipporEntry *entry, ClipporSelectionType selection,
     gboolean update, GError **error
 );
+static gboolean wayland_seat_client_owns_selection(
+    ClipporClient *self, ClipporSelectionType selection
+);
 
 static void
 wayland_seat_set_property(
@@ -164,6 +167,7 @@ wayland_seat_class_init(WaylandSeatClass *class)
     clipporclient_class->get_data = wayland_seat_client_get_data;
     clipporclient_class->get_mime_types = wayland_seat_client_get_mime_types;
     clipporclient_class->set_entry = wayland_seat_client_set_entry;
+    clipporclient_class->owns_selection = wayland_seat_client_owns_selection;
 
     gobject_class->set_property = wayland_seat_set_property;
     gobject_class->get_property = wayland_seat_get_property;
@@ -300,15 +304,14 @@ wayland_seat_clipboard_valid(WaylandSeat *self)
 static WaylandSeatSelection *
 wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection)
 {
+    g_assert(WAYLAND_IS_SEAT(self));
+    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
+
     if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
         return &self->clipboard.regular;
     else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
         return &self->clipboard.primary;
-    else
-    {
-        g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
-        return NULL;
-    }
+    return NULL;
 }
 
 static void wayland_data_device_listener_data_offer(
@@ -697,4 +700,16 @@ wayland_seat_client_set_entry(
         return FALSE;
     }
     return TRUE;
+}
+
+static gboolean
+wayland_seat_client_owns_selection(
+    ClipporClient *self, ClipporSelectionType selection
+)
+{
+    g_assert(WAYLAND_IS_SEAT(self));
+    WaylandSeat *seat = WAYLAND_SEAT(self);
+    WaylandSeatSelection *sel = wayland_seat_get_selection(seat, selection);
+
+    return sel->source != NULL;
 }

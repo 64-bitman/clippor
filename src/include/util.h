@@ -10,19 +10,6 @@
     for (GList *__glist = list; __glist && (item = __glist->data, TRUE);       \
          __glist = __glist->next)
 
-#define assert_wait(expr, cond, assert_suffix, timeout_ms)                     \
-    do                                                                         \
-    {                                                                          \
-        int64_t __start = g_get_monotonic_time();                              \
-        while (!(expr cond))                                                   \
-        {                                                                      \
-            if (g_get_monotonic_time() - __start >= timeout_ms * 1000)         \
-                break;                                                         \
-            g_usleep(1000);                                                    \
-        }                                                                      \
-        g_assert_##assert_suffix(expr);                                        \
-    } while (FALSE)
-
 typedef struct _ClipporData ClipporData;
 
 #define UTIL_ERROR (util_error_quark())
@@ -47,12 +34,13 @@ gboolean util_remove_dir(const char *path, GError **error);
 
 ClipporData *clippor_data_new(gboolean do_checksum);
 ClipporData *
-clippor_data_new_take(gpointer data, size_t size, gboolean do_checksum);
+clippor_data_new_take(gconstpointer data, size_t size, gboolean do_checksum);
 void clippor_data_unref(ClipporData *self);
 ClipporData *clippor_data_ref(ClipporData *self);
 void clippor_data_append(ClipporData *self, const uint8_t *bytes, uint size);
 ClipporData *clippor_data_finish(ClipporData *self);
 gconstpointer clippor_data_get_data(ClipporData *self, size_t *size);
 const char *clippor_data_get_checksum(ClipporData *data);
+int clippor_data_compare(ClipporData *data1, ClipporData *data2);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(ClipporData, clippor_data_unref)

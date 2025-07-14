@@ -1,12 +1,11 @@
 #include "config.h"
+#include "test.h"
 #include <glib-unix.h>
 #include <glib.h>
 #include <locale.h>
 
 typedef struct
 {
-    const char *config_path;
-    const char *config_contents;
     GError *error;
     Config *config;
 } ConfigFixture;
@@ -14,18 +13,7 @@ typedef struct
 static void
 config_fixture_setup(ConfigFixture *fixture, gconstpointer user_data)
 {
-    fixture->config_contents = user_data;
-    fixture->config_path = "test_config.toml";
-
-    GError *error = NULL;
-    gboolean ret = g_file_set_contents(
-        fixture->config_path, fixture->config_contents, -1, &error
-    );
-
-    if (!ret)
-        g_error("%s", error->message);
-
-    fixture->config = config_init(fixture->config_path, &fixture->error);
+    fixture->config = config_init(user_data, FALSE, &fixture->error);
 }
 
 static void
@@ -37,7 +25,20 @@ config_fixture_teardown(
         g_error_free(fixture->error);
     if (fixture->config != NULL)
         config_free(fixture->config);
-    g_unlink(fixture->config_path);
+}
+
+/*
+ * Test if error if non existement config file given
+ */
+static void
+test_config_nonexistent_file(void)
+{
+    GError *error = NULL;
+
+    g_assert_false(config_init("RANDOM FILE", TRUE, &error));
+    g_assert_error(error, CONFIG_ERROR, CONFIG_ERROR_NO_FILE);
+
+    g_error_free(error);
 }
 
 /*
@@ -156,6 +157,12 @@ main(int argc, char **argv)
     setlocale(LC_ALL, "");
     g_test_init(&argc, &argv, NULL);
 
+    pre_startup();
+
+    struct sigaction sa;
+    set_signal_handler(&sa);
+
+    g_test_add_func("/config/nonexistent-file", test_config_nonexistent_file);
     g_test_add(
         "/config/valid/full", ConfigFixture,
         "dbus_timeout = 1000\n"

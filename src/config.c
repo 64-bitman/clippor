@@ -59,15 +59,22 @@ config_wayland_display_free(ConfigWaylandDisplay *config_dpy)
     } while (0)
 
 /*
- * Populate config with values from configuration file.
+ * Populate config with values from configuration file or string.
  */
 static gboolean
-config_populate(Config *config, const char *config_file, GError **error)
+config_populate(
+    Config *config, const char *config_value, gboolean file, GError **error
+)
 {
     g_assert(config != NULL);
     g_assert(error == NULL || *error == NULL);
 
-    toml_result_t result = toml_parse_file_ex(config_file);
+    toml_result_t result;
+
+    if (file)
+        result = toml_parse_file_ex(config_value);
+    else
+        result = toml_parse(config_value, strlen(config_value));
 
     if (!result.ok)
         TOML_ERROR(result.errmsg);
@@ -334,29 +341,35 @@ fail:
 }
 
 Config *
-config_init(const char *user_config, GError **error)
+config_init(const char *user_config, gboolean file, GError **error)
 {
     g_assert(error == NULL || *error == NULL);
 
-    g_autofree char *config_file;
+    g_autofree char *config_value;
 
-    if (user_config == NULL)
+    if (file)
     {
-        const char *config_dir = g_get_user_config_dir();
+        if (user_config == NULL)
+        {
+            const char *config_dir = g_get_user_config_dir();
 
-        config_file = g_strdup_printf("%s/clippor/config.toml", config_dir);
+            config_value =
+                g_strdup_printf("%s/clippor/config.toml", config_dir);
+        }
+        else
+            config_value = g_strdup(user_config);
+
+        if (g_access(config_value, R_OK) == -1)
+        {
+            g_set_error_literal(
+                error, CONFIG_ERROR, CONFIG_ERROR_NO_FILE,
+                "Config file does not exist"
+            );
+            return NULL;
+        }
     }
     else
-        config_file = g_strdup(user_config);
-
-    if (g_access(config_file, R_OK) == -1)
-    {
-        g_set_error_literal(
-            error, CONFIG_ERROR, CONFIG_ERROR_NO_FILE,
-            "Config file does not exist"
-        );
-        return NULL;
-    }
+        config_value = g_strdup(user_config);
 
     Config *config = g_new(Config, 1);
 
@@ -372,7 +385,7 @@ config_init(const char *user_config, GError **error)
         config->wayland_displays, (GDestroyNotify)config_wayland_display_free
     );
 
-    if (!config_populate(config, config_file, error))
+    if (!config_populate(config, config_value, file, error))
     {
         config_free(config);
         return NULL;

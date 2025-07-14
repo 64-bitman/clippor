@@ -3,6 +3,7 @@
 #include "clippor-clipboard.h"
 #include "clippor-entry.h"
 #include <glib.h>
+#include <sqlite3.h>
 
 #define DATABASE_ERROR (database_error_quark())
 
@@ -20,7 +21,10 @@ typedef enum
 
 GQuark database_error_quark(void);
 
-gboolean database_init(const char *data_directory, GError **error);
+sqlite3 *database_get_db(void);
+
+gboolean
+database_init(const char *data_directory, gboolean in_memory, GError **error);
 void database_uninit(void);
 
 gboolean database_new_entry_row(ClipporEntry *entry, GError **error);

@@ -53,5 +53,5 @@ typedef enum
 
 GQuark config_error_quark(void);
 
-Config *config_init(const char *user_config, GError **error);
+Config *config_init(const char *user_config, gboolean file, GError **error);
 void config_free(Config *config);
