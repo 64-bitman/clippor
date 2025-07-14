@@ -267,7 +267,7 @@ clippor_clipboard_add_entry(ClipporClipboard *self, ClipporEntry *entry)
     while (self->entries->length >= self->max_entries_memory)
         g_object_unref(g_queue_pop_tail(self->entries));
 
-    g_queue_push_head(self->entries, entry);
+    g_queue_push_head(self->entries, g_object_ref(entry));
 }
 
 /*
@@ -481,6 +481,8 @@ skip:
     // Update clients (includes the source client too, because we need to keep
     // their current entry up to date)
     clippor_clipboard_update_clients(cb, entry, FALSE);
+
+    g_object_unref(entry);
 
     if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
         g_debug("Clipboard '%s': Regular selection event", cb->label);

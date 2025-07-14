@@ -124,6 +124,26 @@ test_database_new_mime_type_row(void)
 
     sqlite3_finalize(stmt);
 
+    // Test if row is deleted
+    g_assert_true(
+        database_new_mime_type_row(entry, "text/plain", NULL, &error)
+    );
+
+    g_assert_true(
+        sqlite3_prepare_v2(
+            db,
+            "SELECT Mime_type FROM Mime_types WHERE Mime_type = ? AND Id = ?;",
+            -1, &stmt, NULL
+        ) == SQLITE_OK
+    );
+
+    sqlite3_bind_text(stmt, 1, "text/plain", -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, clippor_entry_get_id(entry), -1, SQLITE_STATIC);
+
+    g_assert_true(sqlite3_step(stmt) == SQLITE_DONE);
+
+    sqlite3_finalize(stmt);
+
     database_uninit();
 }
 
@@ -207,6 +227,10 @@ test_database_get_entry_by_id(void)
 
     cmp_entry(entry, d_entry);
     cmp_entry(entry2, d_entry2);
+
+    g_assert_null(database_get_entry_by_id(cb, "UNKNOWN", &error));
+    g_assert_error(error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT);
+    g_clear_error(&error);
 
     database_uninit();
 }
@@ -477,7 +501,15 @@ test_database_update_mime_type_row(void)
 
     g_assert_cmpstr(data_id, ==, clippor_data_get_checksum(data2));
 
-    g_assert_no_error(error);
+    sqlite3_finalize(stmt);
+
+    g_assert_false(
+        database_update_mime_type_row(entry, "UNKNOWN", data2, &error)
+    );
+    g_assert_error(error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT);
+    g_clear_error(&error);
+
+    database_uninit();
 }
 
 /*
@@ -486,6 +518,98 @@ test_database_update_mime_type_row(void)
 static void
 test_database_get_num_entries(void)
 {
+    g_assert_true(database_init(NULL, TRUE, NULL));
+
+    GError *error = NULL;
+    g_autoptr(ClipporClipboard) cb = clippor_clipboard_new("Test");
+
+    g_object_set(cb, "max-entries", 5, NULL);
+
+    for (int i = 0; i < 10; i++)
+    {
+        g_autoptr(ClipporEntry) entry = clippor_entry_new(
+            NULL, -1, NULL, cb, CLIPPOR_SELECTION_TYPE_NONE, &error
+        );
+        g_assert_no_error(error);
+    }
+
+    g_assert_cmpint(database_get_num_entries(cb, &error), ==, 10);
+    g_assert_no_error(error);
+
+    g_assert_true(database_trim_entry_rows(cb, TRUE, &error));
+    g_assert_no_error(error);
+
+    g_assert_cmpint(database_get_num_entries(cb, &error), ==, 0);
+    g_assert_no_error(error);
+
+    database_uninit();
+}
+
+/*
+ * Test if checking if entry exists via id works properly
+ */
+static void
+test_database_entry_id_exists(void)
+{
+    g_assert_true(database_init(NULL, TRUE, NULL));
+
+    GError *error = NULL;
+    g_autoptr(ClipporClipboard) cb = clippor_clipboard_new("Test");
+    g_autoptr(ClipporEntry) entry = clippor_entry_new(
+        NULL, -1, NULL, cb, CLIPPOR_SELECTION_TYPE_NONE, &error
+    );
+    g_assert_no_error(error);
+
+    const char *id = clippor_entry_get_id(entry);
+
+    g_assert_cmpint(database_entry_id_exists(id, &error), ==, 0);
+    g_assert_no_error(error);
+
+    g_assert_cmpint(database_entry_id_exists("unknown", &error), ==, 1);
+    g_assert_no_error(error);
+
+    database_uninit();
+}
+
+/*
+ * Test if a list of entries either starred or not starred is returned correctly
+ */
+static void
+test_database_list_entries_starred_status(void)
+{
+    g_assert_true(database_init(NULL, TRUE, NULL));
+
+    GError *error = NULL;
+    g_autoptr(ClipporClipboard) cb = clippor_clipboard_new("Test");
+
+    g_autoptr(ClipporEntry) entry = clippor_entry_new(
+        NULL, -1, NULL, cb, CLIPPOR_SELECTION_TYPE_NONE, &error
+    );
+    g_assert_no_error(error);
+
+    clippor_entry_update_property(entry, &error, "starred", TRUE, NULL);
+    g_assert_no_error(error);
+
+    g_autoptr(ClipporEntry) entry2 = clippor_entry_new(
+        NULL, -1, NULL, cb, CLIPPOR_SELECTION_TYPE_NONE, &error
+    );
+    g_assert_no_error(error);
+
+    g_autoptr(GPtrArray) starred =
+        database_list_entries_starred_status(TRUE, &error);
+    g_assert_no_error(error);
+
+    g_autoptr(GPtrArray) unstarred =
+        database_list_entries_starred_status(FALSE, &error);
+    g_assert_no_error(error);
+
+    g_assert_cmpint(starred->len, ==, 1);
+    g_assert_cmpint(unstarred->len, ==, 1);
+
+    g_assert_cmpstr(starred->pdata[0], ==, clippor_entry_get_id(entry));
+    g_assert_cmpstr(unstarred->pdata[0], ==, clippor_entry_get_id(entry2));
+
+    database_uninit();
 }
 
 int
@@ -527,6 +651,11 @@ main(int argc, char **argv)
         "/database/update-mime-type-row", test_database_update_mime_type_row
     );
     g_test_add_func("/database/get-num-entries", test_database_get_num_entries);
+    g_test_add_func("/database/entry-id-exists", test_database_entry_id_exists);
+    g_test_add_func(
+        "/database/list-entries-starred-status",
+        test_database_list_entries_starred_status
+    );
 
     return g_test_run();
 }

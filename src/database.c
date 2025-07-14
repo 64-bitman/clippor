@@ -442,8 +442,11 @@ database_new_mime_type_row(
     g_assert(mime_type != NULL);
     g_assert(error == NULL || *error == NULL);
 
+    const char *id = clippor_entry_get_id(entry);
+
     if (data == NULL)
-        return TRUE;
+        // Delete row
+        return database_remove_mime_type_row_by_id(id, mime_type, error);
 
     const char *data_id = database_ref_data_row(data, error);
 
@@ -461,7 +464,7 @@ database_new_mime_type_row(
 
     PREPARE(FALSE);
 
-    sqlite3_bind_text(stmt, 1, clippor_entry_get_id(entry), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, mime_type, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 3, data_id, -1, SQLITE_STATIC);
 

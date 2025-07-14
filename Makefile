@@ -35,6 +35,8 @@ coverage:
 	lcov --remove build/coverage.info '/usr/*' 'tests/*' \
 		--output-file build/coverage.filtered.info --rc lcov_branch_coverage=1
 	genhtml build/coverage.filtered.info --branch-coverage --output-directory build/coverage
+
+show_coverage: coverage
 	xdg-open build/coverage/index.html
 
 .PHONY: all reset clean run test

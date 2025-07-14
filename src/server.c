@@ -38,9 +38,6 @@ wayland_connections_free_func(GWeakRef *ref)
 void
 server_free(uint flags)
 {
-    for (uint i = 0; i < G_N_ELEMENTS(SIGNAL_SOURCE_TAGS); i++)
-        g_source_remove(SIGNAL_SOURCE_TAGS[i]);
-
     if (MAIN_LOOP != NULL)
         g_clear_pointer(&MAIN_LOOP, g_main_loop_unref);
 
@@ -58,6 +55,9 @@ server_free(uint flags)
 static gboolean
 on_exit_signal(gpointer user_data G_GNUC_UNUSED)
 {
+    for (uint i = 0; i < G_N_ELEMENTS(SIGNAL_SOURCE_TAGS); i++)
+        g_source_remove(SIGNAL_SOURCE_TAGS[i]);
+
     g_main_loop_quit(MAIN_LOOP);
     g_main_context_unref(MAIN_CONTEXT);
 
@@ -194,9 +194,6 @@ server_start(const char *config_value, const char *data_directory, uint flags)
     if (!(flags & SERVER_FLAG_MANUAL))
         MAIN_LOOP = g_main_loop_new(MAIN_CONTEXT, FALSE);
 
-    SIGNAL_SOURCE_TAGS[0] = g_unix_signal_add(SIGINT, on_exit_signal, NULL);
-    SIGNAL_SOURCE_TAGS[1] = g_unix_signal_add(SIGTERM, on_exit_signal, NULL);
-
     GError *error = NULL;
 
     gboolean config_is_file = flags & SERVER_FLAG_USE_CONFIG_FILE;
@@ -220,6 +217,10 @@ server_start(const char *config_value, const char *data_directory, uint flags)
 
     if (!(flags & SERVER_FLAG_MANUAL))
     {
+        SIGNAL_SOURCE_TAGS[0] = g_unix_signal_add(SIGINT, on_exit_signal, NULL);
+        SIGNAL_SOURCE_TAGS[1] =
+            g_unix_signal_add(SIGTERM, on_exit_signal, NULL);
+
         g_main_loop_run(MAIN_LOOP);
 
         server_free(SERVER_FLAG_NONE);

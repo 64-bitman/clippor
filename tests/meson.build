@@ -6,7 +6,7 @@ if not wl_paste.found() or not wl_copy.found() or not labwc.found()
   subdir_done()
 endif
 
-tests = ['config', 'clipboard', 'database']
+tests = ['config', 'clipboard', 'database', 'wayland']
 
 foreach name : tests
   exe = executable(

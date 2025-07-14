@@ -429,7 +429,7 @@ new_entry_method_cb(
     ClipporClipboard *cb = user_data;
 
     GError *error = NULL;
-    ClipporEntry *entry = clippor_entry_new(
+    g_autoptr(ClipporEntry) entry = clippor_entry_new(
         NULL, -1, NULL, cb, CLIPPOR_SELECTION_TYPE_NONE, &error
     );
 
