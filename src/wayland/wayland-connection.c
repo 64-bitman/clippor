@@ -739,7 +739,7 @@ wayland_connection_source_prepare(GSource *source, int *timeout_)
 {
     WaylandConnectionSource *ws = (WaylandConnectionSource *)source;
     WaylandConnection *ct = g_weak_ref_get(&ws->ct);
-    struct wl_display *display = wayland_connection_get_display(ct);
+    struct wl_display *display = ct->display.proxy;
     GError *error = NULL;
 
     *timeout_ = -1;
@@ -767,7 +767,7 @@ wayland_connection_source_check(GSource *source)
 {
     WaylandConnectionSource *ws = (WaylandConnectionSource *)source;
     WaylandConnection *ct = g_weak_ref_get(&ws->ct);
-    struct wl_display *display = wayland_connection_get_display(ct);
+    struct wl_display *display = ct->display.proxy;
 
     ws->is_reading = FALSE;
     g_object_unref(ct);
@@ -779,7 +779,7 @@ wayland_connection_source_check(GSource *source)
             "Wayland display '%s' closed",
             wayland_connection_get_display_name(ct)
         );
-        goto fail;
+        goto close;
     }
     if (ws->pfd.revents & G_IO_IN)
     {
@@ -789,7 +789,7 @@ wayland_connection_source_check(GSource *source)
                 "Failed reading events on Wayland display '%s'",
                 wayland_connection_get_display_name(ct)
             );
-            goto fail;
+            goto close;
         }
     }
     else
@@ -802,8 +802,8 @@ wayland_connection_source_check(GSource *source)
     }
 
     return TRUE;
-fail:
-    // Make the object inert
+close:
+    // Unref object
     wayland_connection_uninstall_source(ct);
     g_hash_table_remove_all(ct->gobjects.seats);
     wayland_connection_unsetup(ct);
@@ -819,7 +819,7 @@ wayland_connection_source_dispatch(
 {
     WaylandConnectionSource *ws = (WaylandConnectionSource *)source;
     WaylandConnection *ct = g_weak_ref_get(&ws->ct);
-    struct wl_display *display = wayland_connection_get_display(ct);
+    struct wl_display *display = ct->display.proxy;
 
     g_object_unref(ct);
 
@@ -847,7 +847,7 @@ wayland_connection_source_finalize(GSource *source)
     if (ct == NULL)
         return;
 
-    struct wl_display *display = wayland_connection_get_display(ct);
+    struct wl_display *display = ct->display.proxy;
 
     if (ws->is_reading)
         wl_display_cancel_read(display);
@@ -896,8 +896,8 @@ wayland_connection_install_source(
 
     g_source_add_poll(source, &ws->pfd);
 
-    // Set to highest priority so we will always at least be called before other
-    // non-Wayland sources that may call Wayland functions.
+    // Set to highest priority so we will always at least be called before
+    // other non-Wayland sources that may call Wayland functions.
     g_source_set_priority(source, G_MININT);
     g_source_attach(source, context);
 }
@@ -950,7 +950,7 @@ wayland_connection_get_data_device_manager(WaylandConnection *self)
 }
 
 void
-wayland_data_device_manager_unused(WaylandDataDeviceManager *manager)
+wayland_data_device_manager_discard(WaylandDataDeviceManager *manager)
 {
     if (manager == NULL)
         return;
@@ -1053,7 +1053,7 @@ wayland_data_offer_create_wrapper(void *proxy, WaylandDataProtocol protocol)
 // Each key is the offer object id and its value is the WaylandDataOffer
 // structure. This hash table is used to store/transfer offers in between the
 // data_offer, off_clier, and selection events.
-static GHashTable *pending_offers = NULL;
+static GHashTable *PENDING_OFFERS = NULL;
 
 #define WAYLAND_DATA_PROXY_DESTROY(type, structure)                            \
     void wayland_data_##type##_destroy(structure *type)                        \
@@ -1099,8 +1099,8 @@ wayland_data_offer_destroy(WaylandDataOffer *offer)
     }
     uint32_t id = wl_proxy_get_id(offer->proxy);
 
-    if (pending_offers != NULL)
-        g_hash_table_remove(pending_offers, GUINT_TO_POINTER(id));
+    if (PENDING_OFFERS != NULL)
+        g_hash_table_remove(PENDING_OFFERS, GUINT_TO_POINTER(id));
     g_ptr_array_unref(offer->mime_types);
     g_free(offer);
 }
@@ -1206,15 +1206,15 @@ wayland_data_device_event_data_offer_gen_handler(
         return;
     }
 
-    if (pending_offers == NULL)
+    if (PENDING_OFFERS == NULL)
         // No destroy function for WaylandDataOffer because that has its own
         // destroy function which will remove itself from the hash table.
-        pending_offers =
+        PENDING_OFFERS =
             g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, NULL);
 
     uint32_t id = wl_proxy_get_id(offer_proxy);
 
-    g_hash_table_insert(pending_offers, GUINT_TO_POINTER(id), offer);
+    g_hash_table_insert(PENDING_OFFERS, GUINT_TO_POINTER(id), offer);
 
     // 10 mime types is generally the normal maximum from my experience.
     offer->mime_types = g_ptr_array_new_full(10, g_free);
@@ -1235,7 +1235,7 @@ wayland_data_device_event_selection_gen_handler(
 
     uint32_t id = wl_proxy_get_id(offer_proxy);
     WaylandDataOffer *offer =
-        g_hash_table_lookup(pending_offers, GUINT_TO_POINTER(id));
+        g_hash_table_lookup(PENDING_OFFERS, GUINT_TO_POINTER(id));
 
     if (device->listener->selection == NULL)
     {
@@ -1244,7 +1244,7 @@ wayland_data_device_event_selection_gen_handler(
     }
 
     // Let the callback take ownership of the offer now
-    g_hash_table_remove(pending_offers, GUINT_TO_POINTER(id));
+    g_hash_table_remove(PENDING_OFFERS, GUINT_TO_POINTER(id));
 
     device->listener->selection(device->data, device, offer, selection);
 }
@@ -1430,12 +1430,12 @@ wayland_data_offer_get_mime_types(WaylandDataOffer *offer)
 void
 wayland_connection_free_static(void)
 {
-    if (pending_offers != NULL)
+    if (PENDING_OFFERS != NULL)
     {
         GHashTableIter iter;
         WaylandDataOffer *offer;
 
-        g_hash_table_iter_init(&iter, pending_offers);
+        g_hash_table_iter_init(&iter, PENDING_OFFERS);
 
         while (g_hash_table_iter_next(&iter, NULL, (gpointer *)&offer))
         {
@@ -1443,7 +1443,7 @@ wayland_connection_free_static(void)
             g_hash_table_iter_remove(&iter);
         }
 
-        g_hash_table_unref(pending_offers);
-        pending_offers = NULL;
+        g_hash_table_unref(PENDING_OFFERS);
+        PENDING_OFFERS = NULL;
     }
 }

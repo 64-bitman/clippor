@@ -6,7 +6,8 @@ if not wl_paste.found() or not wl_copy.found() or not labwc.found()
   subdir_done()
 endif
 
-tests = ['config', 'clipboard', 'database', 'wayland']
+tests = ['config', 'database', 'wayland', 'clipboard']
+i = 0
 
 foreach name : tests
   exe = executable(
@@ -23,7 +24,9 @@ foreach name : tests
       'G_TEST_SRCDIR=@0@'.format(meson.current_source_dir()),
       'G_TEST_BUILDDIR=@0@'.format(meson.current_build_dir()),
       ],
+    priority: i,
     protocol: 'tap',
     workdir: meson.current_source_dir(),
     )
+  i += 1
 endforeach

@@ -392,7 +392,7 @@ wayland_seat_clipboard_unsetup(WaylandSeat *self)
 {
     g_assert(WAYLAND_IS_SEAT(self));
 
-    wayland_data_device_manager_unused(self->clipboard.manager);
+    wayland_data_device_manager_discard(self->clipboard.manager);
     wayland_data_device_destroy(self->clipboard.device);
 
     wayland_data_source_destroy(self->clipboard.regular.source);

@@ -94,7 +94,14 @@ gboolean wayland_data_offer_is_valid(WaylandDataOffer *data_offer);
 void wayland_data_device_destroy(WaylandDataDevice *device);
 void wayland_data_source_destroy(WaylandDataSource *source);
 void wayland_data_offer_destroy(WaylandDataOffer *offer);
-void wayland_data_device_manager_unused(WaylandDataDeviceManager *manager);
+void wayland_data_device_manager_discard(WaylandDataDeviceManager *manager);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(WaylandDataDevice, wayland_data_device_destroy)
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(WaylandDataSource, wayland_data_source_destroy)
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(WaylandDataOffer, wayland_data_offer_destroy)
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(
+    WaylandDataDeviceManager, wayland_data_device_manager_discard
+)
 
 WaylandDataDevice *wayland_data_device_manager_get_data_device(
     WaylandDataDeviceManager *manager, WaylandSeat *seat
