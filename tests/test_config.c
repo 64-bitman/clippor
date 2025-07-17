@@ -8,18 +8,16 @@ typedef struct
 {
     GError *error;
     Config *config;
-} ConfigFixture;
+} TestFixture;
 
 static void
-config_fixture_setup(ConfigFixture *fixture, gconstpointer user_data)
+fixture_setup(TEST_AARGS)
 {
     fixture->config = config_init(user_data, FALSE, &fixture->error);
 }
 
 static void
-config_fixture_teardown(
-    ConfigFixture *fixture, gconstpointer user_data G_GNUC_UNUSED
-)
+fixture_teardown(TEST_ARGS)
 {
     if (fixture->error != NULL)
         g_error_free(fixture->error);
@@ -45,9 +43,7 @@ test_config_nonexistent_file(void)
  * Test if config is correctly initialized given a config file
  */
 static void
-test_config_full_valid(
-    ConfigFixture *fixture, gconstpointer user_data G_GNUC_UNUSED
-)
+test_config_full_valid(TEST_ARGS)
 {
     g_assert_no_error(fixture->error);
 
@@ -99,9 +95,7 @@ test_config_full_valid(
  * of an array of tables is correctly picked up as to use all Wayland seats.
  */
 static void
-test_config_all_seats(
-    ConfigFixture *fixture, gconstpointer user_data G_GNUC_UNUSED
-)
+test_config_all_seats(TEST_ARGS)
 {
     g_assert_no_error(fixture->error);
 
@@ -119,9 +113,7 @@ test_config_all_seats(
  * Test if config returns an error on an invalid configuration.
  */
 static void
-test_config_invalid(
-    ConfigFixture *fixture G_GNUC_UNUSED, gconstpointer user_data G_GNUC_UNUSED
-)
+test_config_invalid(TEST_UARGS)
 {
     g_assert_error(fixture->error, CONFIG_ERROR, CONFIG_ERROR_INVALID);
 }
@@ -130,9 +122,7 @@ test_config_invalid(
  * Test if regex for Wayland seat works correctly
  */
 static void
-test_config_seat_regex(
-    ConfigFixture *fixture, gconstpointer user_data G_GNUC_UNUSED
-)
+test_config_seat_regex(TEST_ARGS)
 {
     g_assert_no_error(fixture->error);
 
@@ -163,8 +153,8 @@ main(int argc, char **argv)
     set_signal_handler(&sa);
 
     g_test_add_func("/config/nonexistent-file", test_config_nonexistent_file);
-    g_test_add(
-        "/config/valid/full", ConfigFixture,
+    TEST_ADD_DATA(
+        "/config/valid/full", test_config_full_valid,
         "dbus_timeout = 1000\n"
         "dbus_service = true\n"
         "[[clipboards]]\n"
@@ -183,11 +173,11 @@ main(int argc, char **argv)
         "seat = \"seat0\"\n"
         "clipboard = \"Default\"\n"
         "regular = true\n"
-        "primary = false\n",
-        config_fixture_setup, test_config_full_valid, config_fixture_teardown
+        "primary = false\n"
     );
-    g_test_add(
-        "/config/valid/all-seats", ConfigFixture,
+
+    TEST_ADD_DATA(
+        "/config/valid/all-seats", test_config_all_seats,
         "[[wayland_displays]]\n"
         "display = \"$WAYLAND_DISPLAY\"\n"
         "connection_timeout = 3000\n"
@@ -195,24 +185,24 @@ main(int argc, char **argv)
         "[wayland_displays.seats]\n"
         "clipboard = \"Default\"\n"
         "regular = true\n"
-        "primary = false\n",
-        config_fixture_setup, test_config_all_seats, config_fixture_teardown
+        "primary = false\n"
     );
-    g_test_add(
-        "/config/invalid/no_cb_name", ConfigFixture,
+
+    TEST_ADD_DATA(
+        "/config/invalid/no_cb_name", test_config_invalid,
         "[[clipboards]]\n"
-        "max_entries = 10\n",
-        config_fixture_setup, test_config_invalid, config_fixture_teardown
+        "max_entries = 10\n"
     );
-    g_test_add(
-        "/config/invalid/no_display_name", ConfigFixture,
+
+    TEST_ADD_DATA(
+        "/config/invalid/no_display_name", test_config_invalid,
         "[[wayland_displays]]\n"
         "connection_timeout = 3000\n"
-        "data_timeout = 1500\n",
-        config_fixture_setup, test_config_invalid, config_fixture_teardown
+        "data_timeout = 1500\n"
     );
-    g_test_add(
-        "/config/invalid/no-seat-name", ConfigFixture,
+
+    TEST_ADD_DATA(
+        "/config/invalid/no-seat-name", test_config_invalid,
         "[[wayland_displays]]\n"
         "display = \"$WAYLAND_DISPLAY\"\n"
         "connection_timeout = 3000\n"
@@ -220,11 +210,11 @@ main(int argc, char **argv)
         "[[wayland_displays.seats]]\n"
         "clipboard = \"Default\"\n"
         "regular = true\n"
-        "primary = false\n",
-        config_fixture_setup, test_config_invalid, config_fixture_teardown
+        "primary = false\n"
     );
-    g_test_add(
-        "/config/invalid/no-seat-clipboard", ConfigFixture,
+
+    TEST_ADD_DATA(
+        "/config/invalid/no-seat-clipboard", test_config_invalid,
         "[[wayland_displays]]\n"
         "display = \"$WAYLAND_DISPLAY\"\n"
         "connection_timeout = 3000\n"
@@ -232,56 +222,52 @@ main(int argc, char **argv)
         "[[wayland_displays.seats]]\n"
         "seat = \"seat0\"\n"
         "regular = true\n"
-        "primary = false\n",
-        config_fixture_setup, test_config_invalid, config_fixture_teardown
-    );
-    g_test_add(
-        "/config/invalid/dbus-timeout-too-small", ConfigFixture,
-        "dbus_timeout = -2\n", config_fixture_setup, test_config_invalid,
-        config_fixture_teardown
+        "primary = false\n"
     );
 
-    g_test_add(
-        "/config/invalid/max-entries-zero", ConfigFixture,
+    TEST_ADD_DATA(
+        "/config/invalid/dbus-timeout-too-small", test_config_invalid,
+        "dbus_timeout = -2\n"
+    );
+
+    TEST_ADD_DATA(
+        "/config/invalid/max-entries-zero", test_config_invalid,
         "[[clipboards]]\n"
         "clipboard = \"CB\"\n"
         "max_entries = 0\n"
         "max_entries_memory = 5\n"
         "allowed_mime_types = []\n"
-        "mime_type_groups = []\n",
-        config_fixture_setup, test_config_invalid, config_fixture_teardown
+        "mime_type_groups = []\n"
     );
 
-    g_test_add(
-        "/config/invalid/max-untries-memory-zero", ConfigFixture,
+    TEST_ADD_DATA(
+        "/config/invalid/max-untries-memory-zero", test_config_invalid,
         "[[clipboards]]\n"
         "clipboard = \"CB\"\n"
         "max_entries = 10\n"
         "max_entries_memory = 0\n"
         "allowed_mime_types = []\n"
-        "mime_type_groups = []\n",
-        config_fixture_setup, test_config_invalid, config_fixture_teardown
+        "mime_type_groups = []\n"
     );
 
-    g_test_add(
-        "/config/invalid/connection-timeout-too-small", ConfigFixture,
+    TEST_ADD_DATA(
+        "/config/invalid/connection-timeout-too-small", test_config_invalid,
         "[[wayland_displays]]\n"
         "display = \"DISPLAY\"\n"
         "connection_timeout = -2\n"
-        "data_timeout = 100\n",
-        config_fixture_setup, test_config_invalid, config_fixture_teardown
+        "data_timeout = 100\n"
     );
 
-    g_test_add(
-        "/config/invalid/data-timeout-too-small", ConfigFixture,
+    TEST_ADD_DATA(
+        "/config/invalid/data-timeout-too-small", test_config_invalid,
         "[[wayland_displays]]\n"
         "display = \"DISPLAY\"\n"
         "connection_timeout = 100\n"
-        "data_timeout = -5\n",
-        config_fixture_setup, test_config_invalid, config_fixture_teardown
+        "data_timeout = -5\n"
     );
-    g_test_add(
-        "/config/seat-regex", ConfigFixture,
+
+    TEST_ADD_DATA(
+        "/config/seat-regex", test_config_seat_regex,
         "[[wayland_displays]]\n"
         "display = \"$WAYLAND_DISPLAY\"\n"
         "connection_timeout = 3000\n"
@@ -290,8 +276,7 @@ main(int argc, char **argv)
         "seat = \"seat.*\"\n"
         "clipboard = \"Default\"\n"
         "regular = true\n"
-        "primary = false\n",
-        config_fixture_setup, test_config_seat_regex, config_fixture_teardown
+        "primary = false\n"
     );
 
     return g_test_run();

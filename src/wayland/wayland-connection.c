@@ -275,13 +275,12 @@ wayland_connection_new(const char *display_name, GError **error)
 static void
 wl_log_handler(const char *fmt, va_list args)
 {
-    GError *error = g_error_new_valist(
-        WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_PROTOCOL, fmt, args
-    );
+    g_autoptr(GString) msg = g_string_new(NULL);
 
-    g_warning("Wayland protocol error: '%s'", error->message);
+    g_string_printf(msg, fmt, args);
+    g_string_truncate(msg, msg->len - 1); // Remove the newline libwayland puts
 
-    g_error_free(error);
+    g_warning("Wayland protocol error -> %s", msg->str);
 }
 
 static gboolean

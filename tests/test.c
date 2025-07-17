@@ -28,7 +28,6 @@ set_signal_handler(struct sigaction *sa)
 
     sigaction(SIGTRAP, sa, NULL);
     sigaction(SIGABRT, sa, NULL);
-
 }
 
 void
@@ -89,6 +88,7 @@ wayland_compositor_start(void)
         }
         g_match_info_free(match);
     }
+    g_assert_nonnull(wc->display);
 
     g_regex_unref(regex);
     g_free(buf);
@@ -289,10 +289,11 @@ server_instance_start(const char *config_contents)
     CONTEXT = g_main_context_new();
     CONFIG_CONTENTS = g_strdup(config_contents);
 
-    server_set_main_context(CONTEXT);
+    g_main_context_push_thread_default(CONTEXT);
     g_assert_true(server_start(
         CONFIG_CONTENTS, NULL, SERVER_FLAG_DB_IN_MEMORY | SERVER_FLAG_MANUAL
     ));
+
     RUNNING = TRUE;
 }
 
@@ -311,8 +312,6 @@ static void *
 server_thread(gpointer user_data G_GNUC_UNUSED)
 {
     g_main_context_push_thread_default(CONTEXT);
-
-    g_assert(g_main_context_is_owner(CONTEXT));
 
     LOOP = g_main_loop_new(CONTEXT, FALSE);
 
@@ -339,6 +338,8 @@ server_instance_run(void)
 {
     g_assert(RUNNING);
     g_assert(!THREAD_RUNNING);
+
+    g_main_context_pop_thread_default(CONTEXT);
     LOOP_THREAD = g_thread_new("clippor-test", server_thread, NULL);
     THREAD_RUNNING = TRUE;
 }
@@ -353,6 +354,7 @@ server_instance_pause(void)
         CONTEXT, G_PRIORITY_LOW, server_thread_quit, NULL, NULL
     );
     g_thread_join(LOOP_THREAD);
+    g_main_context_push_thread_default(CONTEXT);
     THREAD_RUNNING = FALSE;
 }
 
@@ -363,6 +365,7 @@ server_instance_stop(void)
     g_assert(!THREAD_RUNNING);
 
     server_free(SERVER_FLAG_NONE);
+    g_main_context_pop_thread_default(CONTEXT);
     g_main_context_unref(CONTEXT);
     g_free(CONFIG_CONTENTS);
     RUNNING = FALSE;

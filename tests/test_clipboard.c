@@ -26,7 +26,7 @@ test_clipboard_start(void)
         "group = [ \"TEXT\", \"STRING\", \"UTF8_STRING\", \"text/plain\" ]\n"
     );
 
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
     int64_t max_entries, max_entries_memory;
 
     g_assert_nonnull(cb);
@@ -103,7 +103,7 @@ test_clipboard_history_simple(void)
     server_instance_start(config_contents);
 
     GError *error = NULL;
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
@@ -190,7 +190,7 @@ test_clipboard_history_multiple_connections(void)
 
     server_instance_start(config_contents);
 
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
     GError *error = NULL;
     ClipporEntry *entry;
     ClipporClient *client;
@@ -319,7 +319,7 @@ test_clipboard_history_startup(void)
 
     server_instance_start(config_contents);
 
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_autoptr(ClipporEntry) entry = NULL;
 
@@ -370,7 +370,7 @@ test_clipboard_history_trim(void)
     server_instance_start(config_contents);
 
     GError *error = NULL;
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
@@ -439,7 +439,7 @@ test_clipboard_history_starred(void)
     server_instance_start(config_contents);
 
     GError *error = NULL;
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
@@ -494,7 +494,7 @@ test_clipboard_history_persists(void)
 
     server_instance_start(config_contents);
 
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
@@ -506,7 +506,7 @@ test_clipboard_history_persists(void)
 
     server_instance_restart();
 
-    cb = server_get_clipboards()->pdata[0];
+    cb = server_get_clipboard("Default");
     g_autoptr(ClipporEntry) d_entry = clippor_clipboard_get_entry(cb, 0, NULL);
 
     g_assert_nonnull(d_entry);
@@ -560,8 +560,8 @@ test_clipboard_history_multiple_clipboards(void)
 
     server_instance_start(config_contents);
 
-    ClipporClipboard *cb1 = server_get_clipboards()->pdata[0];
-    ClipporClipboard *cb2 = server_get_clipboards()->pdata[1];
+    ClipporClipboard *cb1 = server_get_clipboard("one");
+    ClipporClipboard *cb2 = server_get_clipboard("two");
 
     g_assert_null(clippor_clipboard_get_entry(cb1, 0, NULL));
     g_assert_null(clippor_clipboard_get_entry(cb2, 0, NULL));
@@ -608,8 +608,8 @@ test_clipboard_history_multiple_clipboards(void)
     server_instance_restart();
 
     // Check if they are correctly stored in database
-    cb1 = server_get_clipboards()->pdata[0];
-    cb2 = server_get_clipboards()->pdata[1];
+    cb1 = server_get_clipboard("one");
+    cb2 = server_get_clipboard("two");
 
     g_autoptr(ClipporEntry) d_entry1 = NULL, d_entry2 = NULL, d_entry3 = NULL;
 
@@ -657,7 +657,7 @@ test_clipboard_history_own_on_clear(void)
 
     server_instance_start(config_contents);
 
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
@@ -713,7 +713,7 @@ test_clipboard_history_remove(void)
     server_instance_start(config_contents);
 
     GError *error = NULL;
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
@@ -770,7 +770,7 @@ test_clipboard_history_clear(void)
     server_instance_start(config_contents);
 
     GError *error = NULL;
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
@@ -821,7 +821,7 @@ test_clipboard_filter_allowed_mime_types(void)
     server_instance_start(config_contents);
 
     GError *error = NULL;
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 
@@ -866,7 +866,7 @@ test_clipboard_filter_mime_type_groups(void)
 
     server_instance_start(config_contents);
 
-    ClipporClipboard *cb = server_get_clipboards()->pdata[0];
+    ClipporClipboard *cb = server_get_clipboard("Default");
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
 

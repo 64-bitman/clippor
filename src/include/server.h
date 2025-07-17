@@ -1,6 +1,17 @@
 #pragma once
 
+#include "clippor-clipboard.h"
 #include <glib.h>
+
+#define SERVER_ERROR (server_error_quark())
+
+typedef enum
+{
+    SERVER_ERROR_CLIPBOARD_EXISTS,
+    SERVER_ERROR_WAYLAND_CONNECTION_EXISTS
+} ServerError;
+
+GQuark server_error_quark(void);
 
 typedef enum
 {
@@ -17,6 +28,8 @@ gboolean
 server_start(const char *config_value, const char *data_directory, uint flags);
 
 GMainLoop *server_get_main_loop(void);
-const GPtrArray *server_get_clipboards(void);
-void server_set_main_context(GMainContext *context);
-GMainContext *server_get_main_context(void);
+ClipporClipboard *server_get_clipboard(const char *label);
+GHashTable *server_get_clipboards(void);
+
+gboolean server_add_clipboard(ClipporClipboard *cb, GError **error);
+void server_remove_clipboard(const char *label);

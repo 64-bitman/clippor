@@ -385,6 +385,7 @@ config_init(const char *user_config, gboolean file, GError **error)
         config->wayland_displays, (GDestroyNotify)config_wayland_display_free
     );
 
+    g_assert(config_value != NULL);
     if (!config_populate(config, config_value, file, error))
     {
         config_free(config);

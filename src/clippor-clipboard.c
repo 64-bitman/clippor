@@ -125,6 +125,8 @@ clippor_clipboard_dispose(GObject *object)
 {
     ClipporClipboard *self = CLIPPOR_CLIPBOARD(object);
 
+    dbus_service_remove_clipboard(self);
+
     g_hash_table_remove_all(self->clients);
 
     g_queue_clear_full(self->entries, g_object_unref);

@@ -4,43 +4,54 @@
 #include <glib.h>
 #include <locale.h>
 
+typedef struct
+{
+    WaylandCompositor *wc;
+    WaylandConnection *ct;
+} TestFixture;
+
+static void
+fixture_setup(TEST_ARGS)
+{
+    GError *error = NULL;
+
+    fixture->wc = wayland_compositor_start();
+    fixture->ct = wayland_connection_new(fixture->wc->display, &error);
+
+    g_assert_nonnull(fixture->ct);
+    g_assert_no_error(error);
+}
+
+static void
+fixture_teardown(TEST_ARGS)
+{
+    if (fixture->ct != NULL)
+        g_object_unref(fixture->ct);
+    wayland_connection_free_static();
+    if (fixture->wc != NULL)
+        wayland_compositor_stop(fixture->wc);
+}
+
 /*
  * Test if Wayland connection starts up correctly
  */
 static void
-test_wayland_connection_startup(void)
+test_wayland_connection_startup(TEST_ARGS)
 {
-    WaylandCompositor *wc = wayland_compositor_start();
-
-    GError *error = NULL;
-    g_autoptr(WaylandConnection) ct =
-        wayland_connection_new(wc->display, &error);
-
-    g_assert_no_error(error);
-    g_assert_nonnull(ct);
-
-    g_assert_cmpstr(wayland_connection_get_display_name(ct), ==, wc->display);
-
-    wayland_compositor_stop(wc);
-    wayland_connection_free_static();
+    g_assert_cmpstr(
+        wayland_connection_get_display_name(fixture->ct), ==,
+        fixture->wc->display
+    );
 }
 
 /*
  * Test if seat can be retrieved from connection
  */
 static void
-test_wayland_connection_get_seat(void)
+test_wayland_connection_get_seat(TEST_ARGS)
 {
-    WaylandCompositor *wc = wayland_compositor_start();
-
     GError *error = NULL;
-    g_autoptr(WaylandConnection) ct =
-        wayland_connection_new(wc->display, &error);
-
-    g_assert_no_error(error);
-    g_assert_nonnull(ct);
-
-    WaylandSeat *seat = wayland_connection_get_seat(ct, NULL);
+    WaylandSeat *seat = wayland_connection_get_seat(fixture->ct, NULL);
 
     g_assert_nonnull(seat);
 
@@ -49,12 +60,9 @@ test_wayland_connection_get_seat(void)
         g_regex_new(seat_name, G_REGEX_DEFAULT, G_REGEX_MATCH_DEFAULT, &error);
     g_assert_no_error(error);
 
-    WaylandSeat *match = wayland_connection_match_seat(ct, regex);
+    WaylandSeat *match = wayland_connection_match_seat(fixture->ct, regex);
 
     g_assert_nonnull(match);
-
-    wayland_compositor_stop(wc);
-    wayland_connection_free_static();
 }
 
 static gboolean
@@ -138,25 +146,16 @@ static WaylandDataSourceListener source_listener = {
  * Test if Wayland events such as a new selection are received properly
  */
 static void
-test_wayland_connection_events(void)
+test_wayland_connection_events(TEST_ARGS)
 {
-    WaylandCompositor *wc = wayland_compositor_start();
-
     GError *error = NULL;
-    g_autoptr(WaylandConnection) ct =
-        wayland_connection_new(wc->display, &error);
-
-    g_assert_no_error(error);
-    g_assert_nonnull(ct);
-
-    WaylandSeat *seat = wayland_connection_get_seat(ct, NULL);
+    WaylandSeat *seat = wayland_connection_get_seat(fixture->ct, NULL);
     g_autoptr(WaylandDataDeviceManager) manager =
-        wayland_connection_get_data_device_manager(ct);
+        wayland_connection_get_data_device_manager(fixture->ct);
 
     g_assert_nonnull(manager);
 
     // Test data device and data offer
-
     g_autoptr(WaylandDataDevice) device =
         wayland_data_device_manager_get_data_device(manager, seat);
 
@@ -165,10 +164,10 @@ test_wayland_connection_events(void)
     uint check = 0;
     wayland_data_device_add_listener(device, &device_listener, &check);
 
-    wl_copy(wc, FALSE, NULL, "REGULAR");
-    wl_copy(wc, TRUE, NULL, "PRIMARY");
+    wl_copy(fixture->wc, FALSE, NULL, "REGULAR");
+    wl_copy(fixture->wc, TRUE, NULL, "PRIMARY");
 
-    wayland_connection_roundtrip(ct, &error);
+    wayland_connection_roundtrip(fixture->ct, &error);
     g_assert_no_error(error);
 
     g_assert_cmpint(check, ==, 100);
@@ -185,12 +184,13 @@ test_wayland_connection_events(void)
         device, source, CLIPPOR_SELECTION_TYPE_REGULAR
     );
 
-    wayland_connection_roundtrip(ct, &error);
+    wayland_connection_roundtrip(fixture->ct, &error);
     g_assert_no_error(error);
 
     char *cmdline[] = {"wl-paste", "-t", "TEST", NULL};
-    char **environment =
-        g_environ_setenv(g_get_environ(), "WAYLAND_DISPLAY", wc->display, TRUE);
+    char **environment = g_environ_setenv(
+        g_get_environ(), "WAYLAND_DISPLAY", fixture->wc->display, TRUE
+    );
 
     g_assert_true(g_spawn_async(
         NULL, cmdline, environment, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL,
@@ -198,7 +198,7 @@ test_wayland_connection_events(void)
     ));
     g_assert_no_error(error);
 
-    wayland_connection_dispatch(ct, &error);
+    wayland_connection_dispatch(fixture->ct, &error);
     g_assert_no_error(error);
 
     // Send event
@@ -207,63 +207,53 @@ test_wayland_connection_events(void)
     check = 0;
 
     // Cancelled event
-    wl_copy(wc, FALSE, NULL, "REGULAR");
+    wl_copy(fixture->wc, FALSE, NULL, "REGULAR");
 
-    wayland_connection_dispatch(ct, &error);
+    wayland_connection_dispatch(fixture->ct, &error);
     g_assert_no_error(error);
 
     g_assert_cmpint(check, ==, 52);
 
     g_strfreev(environment);
-
-    wayland_compositor_stop(wc);
-    wayland_connection_free_static();
 }
 
 /*
  * Test if connection object unrefs itself when compositor is killed
  */
 static void
-test_wayland_connection_compositor_killed(void)
+test_wayland_connection_compositor_killed(TEST_ARGS)
 {
-    WaylandCompositor *wc = wayland_compositor_start();
     g_autoptr(GMainContext) context = g_main_context_new();
-
-    GError *error = NULL;
-    WaylandConnection *ct = wayland_connection_new(wc->display, &error);
-
-    g_assert_no_error(error);
-    g_assert_nonnull(ct);
-
     GWeakRef ref;
 
-    g_weak_ref_init(&ref, ct);
+    g_weak_ref_init(&ref, fixture->ct);
 
-    wayland_connection_install_source(ct, context);
+    wayland_connection_install_source(fixture->ct, context);
 
     while (g_main_context_pending(context))
         g_main_context_iteration(context, FALSE);
 
-    wayland_compositor_stop(wc);
+    wayland_compositor_stop(fixture->wc);
+    fixture->wc = NULL;
 
     int64_t start = g_get_monotonic_time();
 
     while (g_get_monotonic_time() - start < 3 * G_USEC_PER_SEC)
     {
-        WaylandConnection *ct =g_weak_ref_get(&ref);
+        WaylandConnection *ct = g_weak_ref_get(&ref);
 
         if (ct == NULL)
             break;
-        else 
+        else
+        {
             g_object_unref(ct);
+            fixture->ct = NULL;
+        }
         g_main_context_iteration(context, FALSE);
     }
-
     g_assert_null(g_weak_ref_get(&ref));
 
     g_weak_ref_clear(&ref);
-
-    wayland_connection_free_static();
 }
 
 int
@@ -277,16 +267,10 @@ main(int argc, char **argv)
     struct sigaction sa;
     set_signal_handler(&sa);
 
-    g_test_add_func(
-        "/wayland/connection/startup", test_wayland_connection_startup
-    );
-    g_test_add_func(
-        "/wayland/connection/get-seat", test_wayland_connection_get_seat
-    );
-    g_test_add_func(
-        "/wayland/connection/data-device-events", test_wayland_connection_events
-    );
-    g_test_add_func(
+    TEST_ADD("/wayland/connection/startup", test_wayland_connection_startup);
+    TEST_ADD("/wayland/connection/get-seat", test_wayland_connection_get_seat);
+    TEST_ADD("/wayland/connection/events", test_wayland_connection_events);
+    TEST_ADD(
         "/wayland/connection/compositor-killed",
         test_wayland_connection_compositor_killed
     );

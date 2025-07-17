@@ -6,7 +6,7 @@ if not wl_paste.found() or not wl_copy.found() or not labwc.found()
   subdir_done()
 endif
 
-tests = ['config', 'database', 'wayland', 'clipboard']
+tests = ['config', 'database', 'wayland', 'dbus', 'clipboard', 'server']
 i = 0
 
 foreach name : tests

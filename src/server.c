@@ -9,11 +9,13 @@
 #include "wayland-seat.h"
 #include <glib.h>
 
-static GMainContext *MAIN_CONTEXT;
+G_DEFINE_QUARK(server_error_quark, server_error)
+
 static GMainLoop *MAIN_LOOP;
 
-static GPtrArray *CLIPBOARDS;
-static GPtrArray *WAYLAND_CONNECTIONS;
+// Each key is the name/label of the object and its value is the object
+static GHashTable *CLIPBOARDS;
+static GHashTable *WAYLAND_CONNECTIONS;
 
 static Config *CONFIG;
 
@@ -42,8 +44,8 @@ server_free(uint flags)
         g_clear_pointer(&MAIN_LOOP, g_main_loop_unref);
 
     wayland_connection_free_static();
-    g_ptr_array_unref(WAYLAND_CONNECTIONS);
-    g_ptr_array_unref(CLIPBOARDS);
+    g_hash_table_unref(WAYLAND_CONNECTIONS);
+    g_hash_table_unref(CLIPBOARDS);
 
     config_free(CONFIG);
     dbus_server_uninit();
@@ -59,7 +61,6 @@ on_exit_signal(gpointer user_data G_GNUC_UNUSED)
         g_source_remove(SIGNAL_SOURCE_TAGS[i]);
 
     g_main_loop_quit(MAIN_LOOP);
-    g_main_context_unref(MAIN_CONTEXT);
 
     g_info("Exiting...");
 
@@ -72,18 +73,8 @@ server_set_config_add_wayland_seat(
     WaylandSeat *seat
 )
 {
-    ClipporClipboard *cb = NULL;
-
-    // Find clipboard with given name
-    for (uint j = 0; j < CLIPBOARDS->len; j++)
-    {
-        cb = CLIPBOARDS->pdata[j];
-
-        if (g_strcmp0(
-                clippor_clipboard_get_label(cb), config_seat->clipboard
-            ) == 0)
-            break;
-    }
+    ClipporClipboard *cb =
+        g_hash_table_lookup(CLIPBOARDS, config_seat->clipboard);
 
     if (cb == NULL)
         return;
@@ -111,6 +102,12 @@ server_set_config(void)
         ConfigClipboard config_cb =
             g_array_index(CONFIG->clipboards, ConfigClipboard, i);
 
+        if (g_hash_table_contains(CLIPBOARDS, config_cb.name))
+        {
+            g_warning("Clipboard '%s' already exists", config_cb.name);
+            continue;
+        }
+
         ClipporClipboard *cb = clippor_clipboard_new(config_cb.name);
 
         if (cb == NULL)
@@ -123,7 +120,7 @@ server_set_config(void)
             config_cb.mime_type_groups, NULL
         );
 
-        g_ptr_array_add(CLIPBOARDS, cb);
+        g_hash_table_insert(CLIPBOARDS, g_strdup(config_cb.name), cb);
     }
 
     // Get Wayland displays and add seats to their respective clipboard
@@ -131,6 +128,14 @@ server_set_config(void)
     {
         ConfigWaylandDisplay config_dpy =
             g_array_index(CONFIG->wayland_displays, ConfigWaylandDisplay, i);
+
+        if (g_hash_table_contains(WAYLAND_CONNECTIONS, config_dpy.display))
+        {
+            g_warning(
+                "Wayland connection '%s' already exists", config_dpy.display
+            );
+            continue;
+        }
 
         GError *error = NULL;
         WaylandConnection *ct =
@@ -147,7 +152,9 @@ server_set_config(void)
 
         g_weak_ref_init(ref, ct);
 
-        g_ptr_array_add(WAYLAND_CONNECTIONS, ref);
+        g_hash_table_insert(
+            WAYLAND_CONNECTIONS, g_strdup(config_dpy.display), ref
+        );
 
         for (uint k = 0; k < config_dpy.seats->len; k++)
         {
@@ -181,18 +188,17 @@ server_set_config(void)
             server_set_config_add_wayland_seat(&config_dpy, &config_seat, seat);
         }
 
-        wayland_connection_install_source(ct, MAIN_CONTEXT);
+        wayland_connection_install_source(
+            ct, g_main_context_get_thread_default()
+        );
     }
 }
 
 gboolean
 server_start(const char *config_value, const char *data_directory, uint flags)
 {
-    if (MAIN_CONTEXT == NULL)
-        MAIN_CONTEXT = g_main_context_ref(g_main_context_default());
-
     if (!(flags & SERVER_FLAG_MANUAL))
-        MAIN_LOOP = g_main_loop_new(MAIN_CONTEXT, FALSE);
+        MAIN_LOOP = g_main_loop_new(g_main_context_get_thread_default(), FALSE);
 
     GError *error = NULL;
 
@@ -205,11 +211,13 @@ server_start(const char *config_value, const char *data_directory, uint flags)
     if (!no_db && !database_init(data_directory, db_in_memory, &error))
         goto fail;
     if (CONFIG->dbus_service &&
-        !dbus_service_init(&error, CONFIG->dbus_timeout))
+        !dbus_service_init(CONFIG->dbus_timeout, &error))
         goto fail;
 
-    CLIPBOARDS = g_ptr_array_new_with_free_func(g_object_unref);
-    WAYLAND_CONNECTIONS = g_ptr_array_new_with_free_func(
+    CLIPBOARDS =
+        g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
+    WAYLAND_CONNECTIONS = g_hash_table_new_full(
+        g_str_hash, g_str_equal, g_free,
         (GDestroyNotify)wayland_connections_free_func
     );
 
@@ -242,26 +250,45 @@ server_get_main_loop(void)
     return MAIN_LOOP;
 }
 
-const GPtrArray *
+/*
+ * Used by tests
+ */
+ClipporClipboard *
+server_get_clipboard(const char *label)
+{
+    return g_hash_table_lookup(CLIPBOARDS, label);
+}
+
+GHashTable *
 server_get_clipboards(void)
 {
     return CLIPBOARDS;
 }
 
 /*
- * Pass NULL to use global default context when calling server_start(). Creates
- * a new reference to the passed context.
+ * Creates a new reference to "cb" on success
  */
-void
-server_set_main_context(GMainContext *context)
+gboolean
+server_add_clipboard(ClipporClipboard *cb, GError **error)
 {
-    if (MAIN_CONTEXT != NULL)
-        g_main_context_unref(MAIN_CONTEXT);
-    MAIN_CONTEXT = g_main_context_ref(context);
+    const char *label = clippor_clipboard_get_label(cb);
+
+    if (g_hash_table_contains(CLIPBOARDS, label))
+    {
+        g_set_error(
+            error, SERVER_ERROR, SERVER_ERROR_CLIPBOARD_EXISTS,
+            "Clipboard already exists in server"
+        );
+        return FALSE;
+    }
+
+    g_hash_table_insert(CLIPBOARDS, g_strdup(label), g_object_ref(cb));
+
+    return TRUE;
 }
 
-GMainContext *
-server_get_main_context(void)
+void
+server_remove_clipboard(const char *label)
 {
-    return MAIN_CONTEXT;
+    g_hash_table_remove(CLIPBOARDS, label);
 }

@@ -1,6 +1,16 @@
 #include "clippor-entry.h"
 #include <glib.h>
 
+#define TEST_ARGS TestFixture *fixture, gconstpointer user_data G_GNUC_UNUSED
+#define TEST_AARGS TestFixture *fixture, gconstpointer user_data
+#define TEST_UARGS                                                             \
+    TestFixture *fixture G_GNUC_UNUSED, gconstpointer user_data G_GNUC_UNUSED
+
+#define TEST_ADD(path, func)                                                   \
+    g_test_add(path, TestFixture, NULL, fixture_setup, func, fixture_teardown)
+#define TEST_ADD_DATA(path, func, data)                                        \
+    g_test_add(path, TestFixture, data, fixture_setup, func, fixture_teardown)
+
 typedef struct
 {
     GPid pid;
