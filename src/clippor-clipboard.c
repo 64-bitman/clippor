@@ -714,3 +714,39 @@ clippor_clipboard_clear_history(ClipporClipboard *self, GError **error)
 
     return TRUE;
 }
+
+/*
+ * If entry does not exist in clipboard history, add it. If it does exist, then
+ * set it as the current entry.
+ */
+gboolean
+clippor_clipboard_set_entry(
+    ClipporClipboard *self, ClipporEntry *entry, GError **error
+)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(CLIPPOR_IS_ENTRY(entry));
+    g_assert(error == NULL || *error == NULL);
+
+    if (!database_trim_entry_rows(self, FALSE, error))
+        return FALSE;
+
+    GList *link;
+
+    if ((link = g_queue_find(self->entries, entry)) != NULL)
+    {
+        // Entry exists in in-memory clipboard history
+        g_queue_unlink(self->entries, link);
+        g_queue_push_head_link(self->entries, link);
+
+        // Update database
+        if (!database_set_entry_row(entry, error))
+            return FALSE;
+    }
+    else
+        clippor_clipboard_add_entry(self, entry);
+
+    clippor_clipboard_update_clients(self, entry, FALSE);
+
+    return TRUE;
+}

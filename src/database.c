@@ -335,6 +335,50 @@ database_update_entry_row(ClipporEntry *entry, GError **error)
 }
 
 /*
+ * Move entry row to the front in history.
+ */
+gboolean
+database_set_entry_row(ClipporEntry *entry, GError **error)
+{
+    g_assert(CLIPPOR_IS_ENTRY(entry));
+    g_assert(error == NULL || *error == NULL);
+
+    const char *id = clippor_entry_get_id(entry);
+
+    const char *statement = "UPDATE Entries "
+                            "SET Position = ("
+                            "SELECT MAX(Position) + 1 FROM Entries"
+                            ")"
+                            "WHERE Id = ?;";
+    sqlite3_stmt *stmt;
+    int ret;
+
+    ret = database_entry_id_exists(id, error);
+
+    if (ret == 1)
+    {
+        g_set_error(
+            error, DATABASE_ERROR, DATABASE_ERROR_ROW_NONEXISTENT,
+            "Entry '%s' does not exist in the database", id
+        );
+        return FALSE;
+    }
+    else if (ret == -1)
+    {
+        g_prefix_error(error, "Failed setting entry '%s': ", id);
+        return FALSE;
+    }
+
+    PREPARE(FALSE);
+
+    sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
+
+    STEP_SINGLE(FALSE);
+
+    return TRUE;
+}
+
+/*
  * Create a new row for data in the 'Data' table if it doesn't exist and write
  * the data to a file. If it does exist, increase the reference count. Returns
  * the calculated Data_id in an allocated string.

@@ -258,6 +258,10 @@ cmp_entry(ClipporEntry *entry, ClipporEntry *entry2)
     GHashTable *d_mime_types = clippor_entry_get_mime_types(entry2);
     GHashTable *mime_types = clippor_entry_get_mime_types(entry);
 
+    g_assert_cmpint(
+        g_hash_table_size(d_mime_types), ==, g_hash_table_size(mime_types)
+    );
+
     GHashTableIter iter;
     const char *mime_type;
 

@@ -14,9 +14,9 @@ struct _ClipporEntry
 
     ClipporClipboard *cb; // Parent clipboard
 
-    GHashTable *mime_types; // Hash table of mime types. Each value is a pointer
-                            // Bytes GObject of the data it represents. Value
-                            // may be NULL is save memory.
+    GHashTable *mime_types; // Hash table of mime types. Key is mime type string
+                            // and each value is data object. Value may be NULL
+                            // is save memory.
     gboolean starred;
     char *id; // Set when entry was created from the database
 
@@ -99,6 +99,7 @@ clippor_entry_dispose(GObject *object)
 {
     ClipporEntry *self = CLIPPOR_ENTRY(object);
 
+    g_weak_ref_clear(&self->from);
     g_hash_table_remove_all(self->mime_types);
 
     G_OBJECT_CLASS(clippor_entry_parent_class)->dispose(object);
@@ -157,6 +158,7 @@ clippor_entry_init(ClipporEntry *self)
     self->mime_types = g_hash_table_new_full(
         g_str_hash, g_str_equal, g_free, (GDestroyNotify)clippor_data_unref
     );
+    g_weak_ref_init(&self->from, NULL);
 }
 
 /*
@@ -247,7 +249,11 @@ clippor_entry_is_from(ClipporEntry *self)
 {
     g_assert(CLIPPOR_IS_ENTRY(self));
 
-    return g_weak_ref_get(&self->from);
+    ClipporClient *client = g_weak_ref_get(&self->from);
+
+    if (client != NULL)
+        g_object_unref(client);
+    return client;
 }
 
 ClipporSelectionType

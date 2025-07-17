@@ -64,3 +64,7 @@ gboolean clippor_clipboard_remove_entry(
 
 gboolean
 clippor_clipboard_clear_history(ClipporClipboard *self, GError **error);
+
+gboolean clippor_clipboard_set_entry(
+    ClipporClipboard *self, ClipporEntry *entry, GError **error
+);

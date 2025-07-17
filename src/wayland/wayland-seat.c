@@ -36,6 +36,8 @@ typedef struct
     // here, and only attempt to receive from it when requested
     WaylandDataOffer *offer;
 
+    gboolean had_selection;
+
     WaylandDataSource *source;
 } WaylandSeatSelection;
 
@@ -198,6 +200,9 @@ wayland_seat_init(WaylandSeat *self)
 
     self->clipboard.regular.parent = self;
     self->clipboard.primary.parent = self;
+
+    self->clipboard.regular.had_selection = FALSE;
+    self->clipboard.primary.had_selection = FALSE;
 
     g_weak_ref_init(&self->clipboard.regular.entry, NULL);
     g_weak_ref_init(&self->clipboard.primary.entry, NULL);
@@ -463,7 +468,9 @@ wayland_data_device_listener_selection(
     else
         return;
 
+    sel->had_selection = TRUE;
     g_signal_emit_by_name(seat, signal_name, selection);
+    sel->had_selection = FALSE;
 }
 
 static void
@@ -480,7 +487,6 @@ wayland_data_offer_listener_offer(
     void *data, WaylandDataOffer *offer, const char *mime_type
 )
 {
-    // Temporary
     (void)data;
     (void)offer;
     (void)mime_type;
@@ -689,7 +695,7 @@ wayland_seat_client_set_entry(
     //  Don't want to immediately steal the selection when there is a new one
     //  (Only if selection is the same).
     if (entry != NULL && clippor_entry_get_selection(entry) == selection)
-        if (clippor_entry_is_from(entry) == self)
+        if (sel->had_selection)
             return TRUE;
 
     if (!wayland_seat_update_selection(seat, sel->type, FALSE, error))

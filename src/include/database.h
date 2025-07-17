@@ -29,6 +29,7 @@ void database_uninit(void);
 
 gboolean database_new_entry_row(ClipporEntry *entry, GError **error);
 gboolean database_update_entry_row(ClipporEntry *entry, GError **error);
+gboolean database_set_entry_row(ClipporEntry *entry, GError **error);
 
 gboolean database_new_mime_type_row(
     ClipporEntry *entry, const char *mime_type, ClipporData *data,

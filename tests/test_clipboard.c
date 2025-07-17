@@ -147,7 +147,6 @@ test_clipboard_history_simple(void)
             client, i == 0 ? CLIPPOR_SELECTION_TYPE_REGULAR
                            : CLIPPOR_SELECTION_TYPE_PRIMARY
         ));
-        g_object_unref(client);
 
         server_instance_pause();
     }
@@ -213,7 +212,7 @@ test_clipboard_history_multiple_connections(void)
         clippor_client_owns_selection(client, CLIPPOR_SELECTION_TYPE_REGULAR)
     );
 
-    g_object_unref(client);
+    g_object_unref(entry);
 
     server_instance_run();
 
@@ -252,7 +251,7 @@ test_clipboard_history_multiple_connections(void)
         clippor_client_owns_selection(client, CLIPPOR_SELECTION_TYPE_REGULAR)
     );
 
-    g_object_unref(client);
+    g_object_unref(entry);
 
     server_instance_run();
 
@@ -332,7 +331,7 @@ test_clipboard_history_startup(void)
 
     g_assert_cmpstr(copy, ==, "TEST");
 
-    g_autoptr(ClipporClient) client = clippor_entry_is_from(entry);
+    ClipporClient *client = clippor_entry_is_from(entry);
 
     g_assert_nonnull(client);
     g_assert_false(
@@ -724,7 +723,7 @@ test_clipboard_history_remove(void)
     wl_copy(wc, FALSE, "text/plain", "DATABASE");
     server_instance_dispatch();
 
-    ClipporEntry *entry = clippor_clipboard_get_entry(cb, 0, &error);
+    g_autoptr(ClipporEntry) entry = clippor_clipboard_get_entry(cb, 0, &error);
 
     g_assert_nonnull(entry);
 
@@ -789,6 +788,65 @@ test_clipboard_history_clear(void)
     g_assert_no_error(error);
 
     g_assert_null(clippor_clipboard_get_entry(cb, 0, NULL));
+
+    server_instance_stop();
+    wayland_compositor_stop(wc);
+}
+
+/*
+ * Test if current entry of clipboard can be changed to an older entry
+ */
+static void
+test_clipboard_history_set_entry(void)
+{
+    WaylandCompositor *wc = wayland_compositor_start();
+
+    g_autofree char *config_contents = g_strdup_printf(
+        "dbus_service = false\n"
+        "[[clipboards]]\n"
+        "clipboard = \"Default\"\n"
+        "max_entries = 5\n"
+        "max_entries_memory = 5\n"
+        "[[wayland_displays]]\n"
+        "display = \"%s\"\n"
+        "[wayland_displays.seats]\n"
+        "clipboard = \"Default\"\n"
+        "regular = true\n"
+        "primary = true\n",
+        wc->display
+    );
+
+    server_instance_start(config_contents);
+
+    GError *error = NULL;
+    ClipporClipboard *cb = server_get_clipboard("Default");
+
+    for (int i = 0; i < 5; i++)
+    {
+        wl_copy(wc, FALSE, "text/plain", "TEST %d", i);
+        server_instance_dispatch();
+    }
+    char *paste;
+
+    g_autoptr(ClipporEntry) entry = clippor_clipboard_get_entry(cb, 4, &error);
+    g_assert_no_error(error);
+
+    clippor_clipboard_set_entry(cb, entry, &error);
+    g_assert_no_error(error);
+
+    server_instance_run();
+    paste = wl_paste(wc, FALSE, FALSE, "text/plain");
+    server_instance_pause();
+
+    g_assert_cmpstr(paste, ==, "TEST 0");
+    g_free(paste);
+
+    // Check if database is updated
+    g_autoptr(ClipporEntry) d_entry =
+        database_get_entry_by_index(cb, 0, &error);
+    g_assert_no_error(error);
+
+    cmp_entry(entry, d_entry);
 
     server_instance_stop();
     wayland_compositor_stop(wc);
@@ -920,6 +978,9 @@ main(int argc, char **argv)
     );
     g_test_add_func("/clipboard/history/remove", test_clipboard_history_remove);
     g_test_add_func("/clipboard/history/clear", test_clipboard_history_clear);
+    g_test_add_func(
+        "/clipboard/history/set-entry", test_clipboard_history_set_entry
+    );
     g_test_add_func(
         "/clipboard/filter/allowed-mime-types",
         test_clipboard_filter_allowed_mime_types
