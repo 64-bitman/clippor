@@ -43,3 +43,5 @@ void server_instance_pause(void);
 void server_instance_stop(void);
 void server_instance_dispatch_and_run(void);
 void server_instance_restart(void);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(WaylandCompositor, wayland_compositor_stop)

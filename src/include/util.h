@@ -30,6 +30,8 @@ util_receive_data(int32_t fd, int timeout, gboolean checksum, GError **error);
 
 char *util_expand_env(const char *name);
 
+char *replace_dbus_illegal_chars(const char *obj, const char *path);
+
 ClipporData *clippor_data_new(gboolean do_checksum);
 ClipporData *
 clippor_data_new_take(gconstpointer data, size_t size, gboolean do_checksum);

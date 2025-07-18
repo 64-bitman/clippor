@@ -254,6 +254,7 @@ server_get_main_loop(void)
 ClipporClipboard *
 server_get_clipboard(const char *label)
 {
+    g_assert(label != NULL);
     return g_hash_table_lookup(CLIPBOARDS, label);
 }
 
@@ -269,6 +270,9 @@ server_get_clipboards(void)
 gboolean
 server_add_clipboard(ClipporClipboard *cb, GError **error)
 {
+    g_assert(CLIPPOR_IS_CLIPBOARD(cb));
+    g_assert(error == NULL || *error == NULL);
+
     const char *label = clippor_clipboard_get_label(cb);
 
     if (g_hash_table_contains(CLIPBOARDS, label))
@@ -288,5 +292,47 @@ server_add_clipboard(ClipporClipboard *cb, GError **error)
 void
 server_remove_clipboard(const char *label)
 {
+    g_assert(label != NULL);
     g_hash_table_remove(CLIPBOARDS, label);
+}
+
+GHashTable *
+server_get_wayland_connections(void)
+{
+    return WAYLAND_CONNECTIONS;
+}
+
+/*
+ * Does not create a new reference to "ct" on success
+ */
+gboolean
+server_add_wayland_connection(WaylandConnection *ct, GError **error)
+{
+    g_assert(WAYLAND_IS_CONNECTION(ct));
+    g_assert(error == NULL || *error == NULL);
+
+    const char *display = wayland_connection_get_display_name(ct);
+
+    if (g_hash_table_contains(WAYLAND_CONNECTIONS, display))
+    {
+        g_set_error(
+            error, SERVER_ERROR, SERVER_ERROR_WAYLAND_CONNECTION_EXISTS,
+            "Wayland connection already exists in server"
+        );
+        return FALSE;
+    }
+
+    GWeakRef *ref = g_new(GWeakRef, 1);
+
+    g_weak_ref_init(ref, ct);
+    g_hash_table_insert(WAYLAND_CONNECTIONS, g_strdup(display), ref);
+
+    return TRUE;
+}
+
+ClipporClipboard *
+server_get_wayland_connection(const char *display)
+{
+    g_assert(display != NULL);
+    return g_hash_table_lookup(WAYLAND_CONNECTIONS, display);
 }

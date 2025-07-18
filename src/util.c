@@ -152,6 +152,23 @@ util_expand_env(const char *name)
     return g_strdup(val);
 }
 
+/*
+ * Replace illegal characters for DBus object paths in "obj" with an underscore
+ * and append it to "path". Used by dbus-service.c and tests.
+ */
+char *
+replace_dbus_illegal_chars(const char *obj, const char *path)
+{
+    g_assert(obj != NULL);
+    g_assert(path != NULL);
+
+    g_autofree char *dup = g_strdup(obj);
+
+    g_strdelimit(dup, "/.-", '_');
+
+    return g_strdup_printf("%s/%s", path, dup);
+}
+
 ClipporData *
 clippor_data_new(gboolean do_checksum)
 {

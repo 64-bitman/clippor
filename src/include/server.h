@@ -1,6 +1,7 @@
 #pragma once
 
 #include "clippor-clipboard.h"
+#include "wayland-connection.h"
 #include <glib.h>
 
 #define SERVER_ERROR (server_error_quark())
@@ -33,3 +34,7 @@ GHashTable *server_get_clipboards(void);
 
 gboolean server_add_clipboard(ClipporClipboard *cb, GError **error);
 void server_remove_clipboard(const char *label);
+
+GHashTable *server_get_wayland_connections(void);
+gboolean server_add_wayland_connection(WaylandConnection *ct, GError **error);
+ClipporClipboard *server_get_wayland_connection(const char *display);

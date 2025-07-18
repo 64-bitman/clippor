@@ -309,7 +309,7 @@ server_instance_dispatch(void)
 {
     g_assert(RUNNING);
     while (g_main_context_pending(CONTEXT))
-        g_main_context_iteration(CONTEXT, FALSE);
+        g_main_context_iteration(CONTEXT, TRUE);
 }
 
 static void *
@@ -354,10 +354,12 @@ server_instance_pause(void)
     g_assert(RUNNING);
     g_assert(THREAD_RUNNING);
 
+    // Make sure to quit loop in the thread it was spawned in
     g_main_context_invoke_full(
         CONTEXT, G_PRIORITY_LOW, server_thread_quit, NULL, NULL
     );
     g_thread_join(LOOP_THREAD);
+    g_thread_unref(LOOP_THREAD);
     g_main_context_push_thread_default(CONTEXT);
     THREAD_RUNNING = FALSE;
 }

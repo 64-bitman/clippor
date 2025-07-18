@@ -1,5 +1,6 @@
 #include "wayland-connection.h"
 #include "clippor-clipboard.h"
+#include "dbus-service.h"
 #include "ext-data-control-v1.h"
 #include "glib.h"
 #include "virtual-keyboard-unstable-v1.h"
@@ -58,6 +59,9 @@ typedef struct
     GPollFD pfd;
     gboolean is_reading;
 } WaylandConnectionSource;
+
+// WaylandConnection should always be weak referenced from outside code, it will
+// unreference itself when the connection is lost.
 
 struct _WaylandConnection
 {
@@ -184,6 +188,7 @@ wayland_connection_dispose(GObject *object)
 {
     WaylandConnection *self = WAYLAND_CONNECTION(object);
 
+    dbus_service_remove_wayland_connection(self);
     g_hash_table_remove_all(self->gobjects.seats);
 
     G_OBJECT_CLASS(wayland_connection_parent_class)->dispose(object);
@@ -268,6 +273,8 @@ wayland_connection_new(const char *display_name, GError **error)
 
         return NULL;
     }
+
+    dbus_service_add_wayland_connection(ct);
 
     return ct;
 }

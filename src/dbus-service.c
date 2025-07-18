@@ -4,6 +4,7 @@
 #include "database.h"
 #include "server.h"
 #include "util.h"
+#include "wayland-connection.h"
 #include <gio/gio.h>
 #include <glib-unix.h>
 
@@ -11,6 +12,7 @@ static GDBusConnection *DBUS_SERVICE_CONNECTION;
 static uint DBUS_SERVICE_IDENTIFIER;
 
 static GDBusObjectManagerServer *CLIPBOARD_OBJ_MANAGER;
+static GDBusObjectManagerServer *WAYLAND_CT_OBJ_MANAGER;
 static GDBusObjectManagerServer *PRIMARY_OBJ_MANAGER;
 
 static gboolean DBUS_READY = FALSE;
@@ -27,12 +29,18 @@ bus_acquired_cb(
 {
     DBUS_SERVICE_CONNECTION = connection;
     CLIPBOARD_OBJ_MANAGER =
-        g_dbus_object_manager_server_new("/com/github/clippor/clipboards");
+        g_dbus_object_manager_server_new("/com/github/Clippor/Clipboards");
+    WAYLAND_CT_OBJ_MANAGER = g_dbus_object_manager_server_new(
+        "/com/github/Clippor/WaylandConnections"
+    );
     PRIMARY_OBJ_MANAGER = g_dbus_object_manager_server_new("/com/github");
 
     // Start exporting objects
     g_dbus_object_manager_server_set_connection(
         CLIPBOARD_OBJ_MANAGER, connection
+    );
+    g_dbus_object_manager_server_set_connection(
+        WAYLAND_CT_OBJ_MANAGER, connection
     );
     g_dbus_object_manager_server_set_connection(
         PRIMARY_OBJ_MANAGER, connection
@@ -82,7 +90,7 @@ dbus_service_init(int timeout, GError **error)
 
     TIMEOUT = timeout;
     DBUS_SERVICE_IDENTIFIER = g_bus_own_name(
-        G_BUS_TYPE_SESSION, "com.github.clippor", G_BUS_NAME_OWNER_FLAGS_NONE,
+        G_BUS_TYPE_SESSION, "com.github.Clippor", G_BUS_NAME_OWNER_FLAGS_NONE,
         bus_acquired_cb, name_acquired_cb, name_lost_cb, loop,
         bus_name_destroy_cb
     );
@@ -106,6 +114,7 @@ dbus_server_uninit(void)
     if (DBUS_READY)
     {
         g_object_unref(CLIPBOARD_OBJ_MANAGER);
+        g_object_unref(WAYLAND_CT_OBJ_MANAGER);
         g_object_unref(PRIMARY_OBJ_MANAGER);
 
         g_bus_unown_name(DBUS_SERVICE_IDENTIFIER);
@@ -148,20 +157,10 @@ clippor_list_clipboards_method_cb(
 )
 {
     GHashTable *cbs = server_get_clipboards();
+
+    // No key should be NULL
     const char **names =
-        g_malloc0_n(g_hash_table_size(cbs) + 1, sizeof(char *));
-
-    GHashTableIter iter;
-    const char *label;
-    int i = 0;
-
-    g_hash_table_iter_init(&iter, cbs);
-
-    while (g_hash_table_iter_next(&iter, (gpointer *)&label, NULL))
-    {
-        names[i] = label;
-        i++;
-    }
+        (const char **)g_hash_table_get_keys_as_array(cbs, NULL);
 
     bus_clippor_complete_list_clipboards(object, invocation, names);
 
@@ -187,11 +186,51 @@ clippor_add_clipboard_method_cb(
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
+static gboolean
+clippor_list_wayland_connections_method_cb(
+    BusClippor *object, GDBusMethodInvocation *invocation,
+    gpointer user_data G_GNUC_UNUSED
+)
+{
+    GHashTable *cts = server_get_wayland_connections();
+
+    const char **displays =
+        (const char **)g_hash_table_get_keys_as_array(cts, NULL);
+
+    bus_clippor_complete_list_wayland_connections(object, invocation, displays);
+
+    g_free(displays);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+clippor_add_wayland_connection_method_cb(
+    BusClippor *object, GDBusMethodInvocation *invocation, const char *display,
+    gpointer user_data G_GNUC_UNUSED
+)
+{
+    GError *error = NULL;
+    WaylandConnection *ct = wayland_connection_new(display, &error);
+
+    if (!server_add_wayland_connection(ct, &error))
+        DBUS_ERRORE(
+            "FailedAddingWaylandConnection", "Failed adding Wayland connection"
+        );
+
+    bus_clippor_complete_add_wayland_connection(object, invocation);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
 static void
 primary_interface_init(void)
 {
     // Create primary object and interface
-    BusObjectSkeleton *object = bus_object_skeleton_new("/com/github/clippor");
+    BusObjectSkeleton *object = bus_object_skeleton_new("/com/github/Clippor");
+
+    g_assert(object != NULL);
+
     BusClippor *iface = bus_clippor_skeleton_new();
 
     bus_object_skeleton_set_clippor(object, iface);
@@ -204,6 +243,14 @@ primary_interface_init(void)
     g_signal_connect(
         iface, "handle-add-clipboard",
         G_CALLBACK(clippor_add_clipboard_method_cb), NULL
+    );
+    g_signal_connect(
+        iface, "handle-list-wayland-connections",
+        G_CALLBACK(clippor_list_wayland_connections_method_cb), NULL
+    );
+    g_signal_connect(
+        iface, "handle-add-wayland-connection",
+        G_CALLBACK(clippor_add_wayland_connection_method_cb), NULL
     );
 
     g_dbus_object_manager_server_export(
@@ -593,17 +640,18 @@ clipboards_list_entries_starred_status_method_cb(
 void
 dbus_service_add_clipboard(ClipporClipboard *cb)
 {
-    g_assert(cb != NULL);
+    g_assert(CLIPPOR_IS_CLIPBOARD(cb));
 
     if (!DBUS_READY)
         return;
 
-    char *path = g_strdup_printf(
-        "/com/github/clippor/clipboards/%s", clippor_clipboard_get_label(cb)
+    g_autofree char *path = replace_dbus_illegal_chars(
+        clippor_clipboard_get_label(cb), "/com/github/Clippor/Clipboards"
     );
+
     BusObjectSkeleton *object = bus_object_skeleton_new(path);
 
-    g_free(path);
+    g_assert(object != NULL);
 
     // Export interface for object
     BusClipporClipboard *iface = bus_clippor_clipboard_skeleton_new();
@@ -675,15 +723,106 @@ dbus_service_add_clipboard(ClipporClipboard *cb)
 void
 dbus_service_remove_clipboard(ClipporClipboard *cb)
 {
-    g_assert(cb != NULL);
+    g_assert(CLIPPOR_IS_CLIPBOARD(cb));
 
     if (!DBUS_READY)
         return;
 
-    char *path = g_strdup_printf(
-        "/com/github/clippor/clipboards/%s", clippor_clipboard_get_label(cb)
+    g_autofree char *path = replace_dbus_illegal_chars(
+        clippor_clipboard_get_label(cb), "/com/github/Clippor/Clipboards"
     );
 
     g_dbus_object_manager_server_unexport(CLIPBOARD_OBJ_MANAGER, path);
-    g_free(path);
+}
+
+static gboolean
+wayland_connections_list_seats_method_cb(
+    BusClipporWaylandConnection *object, GDBusMethodInvocation *invocation,
+    gpointer user_data
+)
+{
+    WaylandConnection *ct = user_data;
+
+    GHashTable *seats = wayland_connection_get_seats(ct);
+    g_autofree char **names =
+        (char **)g_hash_table_get_keys_as_array(seats, NULL);
+
+    bus_clippor_wayland_connection_complete_list_seats(
+        object, invocation, (const char **)names
+    );
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+wayland_connections_connect_seat_method_cb(
+    BusClipporWaylandConnection *object, GDBusMethodInvocation *invocation,
+    const char *seat_name, const char *clipboard_name, uint selection,
+    gpointer user_data
+)
+{
+    WaylandConnection *ct = user_data;
+
+    ClipporClipboard *clipboard = server_get_clipboard(clipboard_name);
+    WaylandSeat *seat = wayland_connection_get_seat(ct, seat_name);
+
+    bus_clippor_wayland_connection_complete_connect_seat(object, invocation);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+void
+dbus_service_add_wayland_connection(WaylandConnection *ct)
+{
+    g_assert(WAYLAND_IS_CONNECTION(ct));
+
+    if (!DBUS_READY)
+        return;
+
+    g_autofree char *path = replace_dbus_illegal_chars(
+        wayland_connection_get_display_name(ct),
+        "/com/github/Clippor/WaylandConnections"
+    );
+
+    BusObjectSkeleton *object = bus_object_skeleton_new(path);
+
+    g_assert(object != NULL);
+
+    BusClipporWaylandConnection *iface =
+        bus_clippor_wayland_connection_skeleton_new();
+
+    bus_object_skeleton_set_clippor_wayland_connection(object, iface);
+    g_object_unref(iface);
+
+    g_signal_connect_object(
+        iface, "handle-list-seats",
+        G_CALLBACK(wayland_connections_list_seats_method_cb), ct,
+        G_CONNECT_DEFAULT
+    );
+    g_signal_connect_object(
+        iface, "handle-connect-seat",
+        G_CALLBACK(wayland_connections_connect_seat_method_cb), ct,
+        G_CONNECT_DEFAULT
+    );
+
+    g_dbus_object_manager_server_export(
+        WAYLAND_CT_OBJ_MANAGER, G_DBUS_OBJECT_SKELETON(object)
+    );
+    g_object_unref(object);
+}
+
+void
+dbus_service_remove_wayland_connection(WaylandConnection *ct)
+{
+    g_assert(WAYLAND_IS_CONNECTION(ct));
+
+    if (!DBUS_READY)
+        return;
+
+    g_autofree char *path = replace_dbus_illegal_chars(
+        wayland_connection_get_display_name(ct),
+        "/com/github/Clippor/WaylandConnections"
+    );
+
+    g_dbus_object_manager_server_unexport(WAYLAND_CT_OBJ_MANAGER, path);
 }

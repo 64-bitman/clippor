@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-Bus Object Introspection 1.0//EN" "http://standards.freedesktop.org/dbus/1.0/introspect.dtd">
 <node>
-    <interface name='com.github.clippor.clipboard'>
+    <interface name='com.github.Clippor.Clipboard'>
         <method name='GetEntryInfo'>
             <arg name='index' type='x' direction='in'/>
             <arg name='id' type='s' direction='out'/>
@@ -61,17 +61,23 @@
         </method>
         <method name='Remove'/>
     </interface>
-    <interface name='com.github.clippor.wayland_connections'>
+    <interface name='com.github.Clippor.WaylandConnection'>
         <method name='ListSeats'>
-            <arg name='seats' type ='a{ss}' direction='out'/>
+            <arg name='seats' type ='as' direction='out'/>
         </method>
         <method name='ConnectSeat'>
             <arg name='seat' type='s' direction='in'/>
             <arg name='clipboard' type='s' direction='in'/>
+            <!--
+                0 = Unknown
+                1 = Regular selection
+                2 = Primary selection
+            -->
+            <arg name='selection' type='u' direction='in'/>
         </method>
         <method name='Remove'/>
     </interface>
-    <interface name='com.github.clippor'>
+    <interface name='com.github.Clippor'>
         <method name='ListClipboards'>
             <arg name='clipboards' type ='as' direction='out'/>
         </method>
