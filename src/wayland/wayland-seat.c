@@ -36,6 +36,8 @@ typedef struct
     // here, and only attempt to receive from it when requested
     WaylandDataOffer *offer;
 
+    // Used to prevent seat from setting selection on selection signal when it
+    // is the one that emitted the selection signal.
     gboolean had_selection;
 
     WaylandDataSource *source;

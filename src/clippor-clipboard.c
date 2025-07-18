@@ -3,6 +3,7 @@
 #include "clippor-entry.h"
 #include "database.h"
 #include "dbus-service.h"
+#include "server.h"
 #include "util.h"
 #include <glib-object.h>
 #include <inttypes.h>
@@ -64,7 +65,22 @@ clippor_clipboard_set_property(
 
     switch ((ClipporClipboardProperty)property_id)
     {
-    case PROP_LABEL:
+    case PROP_LABEL:;
+        // Update server copy of label
+        GHashTable *cbs = server_get_clipboards();
+        char *label;
+        ClipporClipboard *cb;
+
+        if (cbs != NULL && self->label != NULL &&
+            g_hash_table_lookup_extended(
+                cbs, self->label, (gpointer *)&label, (gpointer *)&cb
+            ))
+        {
+            g_hash_table_steal(cbs, label);
+            g_free(label);
+            g_hash_table_insert(cbs, g_value_dup_string(value), cb);
+        }
+
         g_free(self->label);
         self->label = g_value_dup_string(value);
         break;
@@ -749,4 +765,15 @@ clippor_clipboard_set_entry(
     clippor_clipboard_update_clients(self, entry, FALSE);
 
     return TRUE;
+}
+
+/*
+ * Returns array of strings which are the label of each client associated
+ */
+char **
+clippor_clipboard_list_clients(ClipporClipboard *self, uint *size)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+
+    return (char **)g_hash_table_get_keys_as_array(self->clients, size);
 }

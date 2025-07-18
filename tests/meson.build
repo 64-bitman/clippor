@@ -6,7 +6,8 @@ if not wl_paste.found() or not wl_copy.found() or not labwc.found()
   subdir_done()
 endif
 
-tests = ['config', 'database', 'wayland', 'dbus', 'clipboard']
+# Tests that cover more of the entire codebase should be placed first
+tests = ['clipboard', 'dbus', 'config', 'database', 'wayland']
 i = 0
 
 foreach name : tests

@@ -197,9 +197,6 @@ server_set_config(void)
 gboolean
 server_start(const char *config_value, const char *data_directory, uint flags)
 {
-    if (!(flags & SERVER_FLAG_MANUAL))
-        MAIN_LOOP = g_main_loop_new(g_main_context_get_thread_default(), FALSE);
-
     GError *error = NULL;
 
     gboolean config_is_file = flags & SERVER_FLAG_USE_CONFIG_FILE;
@@ -225,6 +222,7 @@ server_start(const char *config_value, const char *data_directory, uint flags)
 
     if (!(flags & SERVER_FLAG_MANUAL))
     {
+        MAIN_LOOP = g_main_loop_new(g_main_context_get_thread_default(), FALSE);
         SIGNAL_SOURCE_TAGS[0] = g_unix_signal_add(SIGINT, on_exit_signal, NULL);
         SIGNAL_SOURCE_TAGS[1] =
             g_unix_signal_add(SIGTERM, on_exit_signal, NULL);

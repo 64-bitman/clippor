@@ -152,66 +152,6 @@ util_expand_env(const char *name)
     return g_strdup(val);
 }
 
-/*
- * Removes directory recursively, without following symlinks.
- */
-gboolean
-util_remove_dir(const char *path, GError **error)
-{
-    g_assert(path != NULL);
-    g_assert(error == NULL || *error == NULL);
-
-    g_autoptr(GQueue) stack = g_queue_new();
-    g_autoptr(GPtrArray) dirs_to_delete =
-        g_ptr_array_new_with_free_func(g_object_unref);
-
-    g_autoptr(GFile) root = g_file_new_for_path(path);
-    g_queue_push_head(stack, g_object_ref(root));
-
-    while (!g_queue_is_empty(stack))
-    {
-        g_autoptr(GFile) dir = g_queue_pop_head(stack);
-
-        g_autoptr(GFileEnumerator) enumerator = g_file_enumerate_children(
-            dir,
-            G_FILE_ATTRIBUTE_STANDARD_NAME "," G_FILE_ATTRIBUTE_STANDARD_TYPE,
-            G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL, error
-        );
-
-        if (!enumerator)
-            return FALSE;
-
-        GFileInfo *info;
-        while ((info = g_file_enumerator_next_file(enumerator, NULL, error)) !=
-               NULL)
-        {
-            g_autoptr(GFileInfo) info_holder = info; // auto-free
-
-            const char *name = g_file_info_get_name(info);
-            GFileType type = g_file_info_get_file_type(info);
-            g_autoptr(GFile) child = g_file_get_child(dir, name);
-
-            if (type == G_FILE_TYPE_DIRECTORY)
-                g_queue_push_head(stack, g_object_ref(child));
-            else if (!g_file_delete(child, NULL, error))
-                return FALSE;
-        }
-
-        // Save this dir for deletion after its children
-        g_ptr_array_add(dirs_to_delete, g_object_ref(dir));
-    }
-
-    // Delete directories in post-order
-    for (gssize i = dirs_to_delete->len - 1; i >= 0; i--)
-    {
-        GFile *dir = g_ptr_array_index(dirs_to_delete, i);
-        if (!g_file_delete(dir, NULL, error))
-            return FALSE;
-    }
-
-    return TRUE;
-}
-
 ClipporData *
 clippor_data_new(gboolean do_checksum)
 {

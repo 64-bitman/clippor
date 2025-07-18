@@ -2,11 +2,10 @@
 #include "clippor-clipboard.h"
 #include "com.github.clippor.h"
 #include "database.h"
-#include "glib-unix.h"
 #include "server.h"
 #include "util.h"
-#include <gio-unix-2.0/gio/gunixoutputstream.h>
 #include <gio/gio.h>
+#include <glib-unix.h>
 
 static GDBusConnection *DBUS_SERVICE_CONNECTION;
 static uint DBUS_SERVICE_IDENTIFIER;
@@ -18,6 +17,8 @@ static gboolean DBUS_READY = FALSE;
 static gboolean DBUS_DESTROYED = FALSE;
 static int TIMEOUT;
 
+static void primary_interface_init(void);
+
 static void
 bus_acquired_cb(
     GDBusConnection *connection, const char *name G_GNUC_UNUSED,
@@ -28,6 +29,14 @@ bus_acquired_cb(
     CLIPBOARD_OBJ_MANAGER =
         g_dbus_object_manager_server_new("/com/github/clippor/clipboards");
     PRIMARY_OBJ_MANAGER = g_dbus_object_manager_server_new("/com/github");
+
+    // Start exporting objects
+    g_dbus_object_manager_server_set_connection(
+        CLIPBOARD_OBJ_MANAGER, connection
+    );
+    g_dbus_object_manager_server_set_connection(
+        PRIMARY_OBJ_MANAGER, connection
+    );
 }
 
 static void
@@ -54,7 +63,6 @@ name_lost_cb(
 
     if (!DBUS_READY)
         g_main_loop_quit(data);
-    dbus_server_uninit();
     DBUS_READY = FALSE;
 }
 
@@ -62,35 +70,6 @@ static void
 bus_name_destroy_cb(gpointer user_data G_GNUC_UNUSED)
 {
     DBUS_DESTROYED = TRUE;
-}
-
-static gboolean
-list_clipboards_method_cb(
-    BusClippor *object, GDBusMethodInvocation *invocation,
-    gpointer user_data G_GNUC_UNUSED
-)
-{
-    GHashTable *cbs = server_get_clipboards();
-    const char **names =
-        g_malloc0_n(g_hash_table_size(cbs) + 1, sizeof(char *));
-
-    GHashTableIter iter;
-    const char *label;
-    int i = 0;
-
-    g_hash_table_iter_init(&iter, cbs);
-
-    while (g_hash_table_iter_next(&iter, (gpointer *)&label, NULL))
-    {
-        names[i] = label;
-        i++;
-    }
-
-    bus_clippor_complete_list_clipboards(object, invocation, names);
-
-    g_free(names);
-
-    return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
 gboolean
@@ -113,25 +92,7 @@ dbus_service_init(int timeout, GError **error)
     g_main_loop_unref(loop);
 
     // Create primary object and interface
-    BusObjectSkeleton *object = bus_object_skeleton_new("/com/github/clippor");
-    BusClippor *iface = bus_clippor_skeleton_new();
-
-    bus_object_skeleton_set_clippor(object, iface);
-    g_object_unref(iface);
-
-    g_signal_connect(
-        iface, "handle-list-clipboards", G_CALLBACK(list_clipboards_method_cb),
-        NULL
-    );
-
-    g_dbus_object_manager_server_export(
-        PRIMARY_OBJ_MANAGER, G_DBUS_OBJECT_SKELETON(object)
-    );
-    g_object_unref(object);
-
-    g_dbus_object_manager_server_set_connection(
-        PRIMARY_OBJ_MANAGER, DBUS_SERVICE_CONNECTION
-    );
+    primary_interface_init();
 
     DBUS_READY = TRUE;
     DBUS_DESTROYED = FALSE;
@@ -146,13 +107,12 @@ dbus_server_uninit(void)
     {
         g_object_unref(CLIPBOARD_OBJ_MANAGER);
         g_object_unref(PRIMARY_OBJ_MANAGER);
+
         g_bus_unown_name(DBUS_SERVICE_IDENTIFIER);
 
         // Iterate main context until there is no more DBus traffic queued up
         while (!DBUS_DESTROYED)
-            g_main_context_iteration(
-                g_main_context_get_thread_default(), FALSE
-            );
+            g_main_context_iteration(g_main_context_get_thread_default(), TRUE);
 
         DBUS_READY = FALSE;
     }
@@ -182,7 +142,78 @@ dbus_server_uninit(void)
     } while (FALSE)
 
 static gboolean
-get_entry_info_method_cb(
+clippor_list_clipboards_method_cb(
+    BusClippor *object, GDBusMethodInvocation *invocation,
+    gpointer user_data G_GNUC_UNUSED
+)
+{
+    GHashTable *cbs = server_get_clipboards();
+    const char **names =
+        g_malloc0_n(g_hash_table_size(cbs) + 1, sizeof(char *));
+
+    GHashTableIter iter;
+    const char *label;
+    int i = 0;
+
+    g_hash_table_iter_init(&iter, cbs);
+
+    while (g_hash_table_iter_next(&iter, (gpointer *)&label, NULL))
+    {
+        names[i] = label;
+        i++;
+    }
+
+    bus_clippor_complete_list_clipboards(object, invocation, names);
+
+    g_free(names);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+clippor_add_clipboard_method_cb(
+    BusClippor *object, GDBusMethodInvocation *invocation, const char *label,
+    gpointer user_data G_GNUC_UNUSED
+)
+{
+    GError *error = NULL;
+    g_autoptr(ClipporClipboard) cb = clippor_clipboard_new(label);
+
+    if (!server_add_clipboard(cb, &error))
+        DBUS_ERRORE("FailedAddingClipboard", "Failed adding clipboard");
+
+    bus_clippor_complete_add_clipboard(object, invocation);
+
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static void
+primary_interface_init(void)
+{
+    // Create primary object and interface
+    BusObjectSkeleton *object = bus_object_skeleton_new("/com/github/clippor");
+    BusClippor *iface = bus_clippor_skeleton_new();
+
+    bus_object_skeleton_set_clippor(object, iface);
+    g_object_unref(iface);
+
+    g_signal_connect(
+        iface, "handle-list-clipboards",
+        G_CALLBACK(clippor_list_clipboards_method_cb), NULL
+    );
+    g_signal_connect(
+        iface, "handle-add-clipboard",
+        G_CALLBACK(clippor_add_clipboard_method_cb), NULL
+    );
+
+    g_dbus_object_manager_server_export(
+        PRIMARY_OBJ_MANAGER, G_DBUS_OBJECT_SKELETON(object)
+    );
+    g_object_unref(object);
+}
+
+static gboolean
+clipboards_get_entry_info_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     int64_t index, gpointer data
 )
@@ -222,7 +253,7 @@ get_entry_info_method_cb(
 }
 
 static gboolean
-get_mime_type_data_method_cb(
+clipboards_get_mime_type_data_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     const char *id, const char *mime_type, GVariant *fd_variant,
     gpointer user_data
@@ -273,7 +304,7 @@ get_mime_type_data_method_cb(
 }
 
 static gboolean
-get_entries_count_method_cb(
+clipboards_get_entries_count_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     gpointer user_data
 )
@@ -295,7 +326,7 @@ get_entries_count_method_cb(
 }
 
 static gboolean
-remove_entry_method_cb(
+clipboards_remove_entry_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     const char *id, gpointer user_data
 )
@@ -312,7 +343,7 @@ remove_entry_method_cb(
 }
 
 static gboolean
-entry_exists_method_cb(
+clipboards_entry_exists_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     const char *id, gpointer user_data G_GNUC_UNUSED
 )
@@ -331,7 +362,7 @@ entry_exists_method_cb(
 }
 
 static gboolean
-clear_history_method_cb(
+clipboards_clear_history_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     gpointer user_data
 )
@@ -348,7 +379,7 @@ clear_history_method_cb(
 }
 
 static gboolean
-set_entry_data_method_cb(
+clipboards_set_entry_data_method_cb(
     BusClipporClipboard *object G_GNUC_UNUSED,
     GDBusMethodInvocation *invocation, const char *id, const char **mime_types,
     gpointer user_data
@@ -430,7 +461,7 @@ set_entry_data_method_cb(
 }
 
 static gboolean
-remove_entry_data_method_cb(
+clipboards_remove_entry_data_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     const char *id, const char **mime_types, gpointer user_data
 )
@@ -458,7 +489,7 @@ remove_entry_data_method_cb(
 }
 
 static gboolean
-new_entry_method_cb(
+clipboards_new_entry_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     gpointer user_data
 )
@@ -483,7 +514,7 @@ new_entry_method_cb(
 }
 
 static gboolean
-set_entry_starred_method_cb(
+clipboards_set_entry_starred_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     const char *id, gboolean starred, gpointer user_data
 )
@@ -510,7 +541,7 @@ set_entry_starred_method_cb(
 }
 
 static gboolean
-update_entry_last_used_method_cb(
+clipboards_update_entry_last_used_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     const char *id, gpointer user_data
 )
@@ -537,7 +568,7 @@ update_entry_last_used_method_cb(
 }
 
 static gboolean
-list_entries_starred_status_method_cb(
+clipboards_list_entries_starred_status_method_cb(
     BusClipporClipboard *object, GDBusMethodInvocation *invocation,
     gboolean starred, gpointer user_data G_GNUC_UNUSED
 )
@@ -581,62 +612,64 @@ dbus_service_add_clipboard(ClipporClipboard *cb)
     g_object_unref(iface);
 
     g_signal_connect_object(
-        iface, "handle-get-entry-info", G_CALLBACK(get_entry_info_method_cb),
-        cb, G_CONNECT_DEFAULT
+        iface, "handle-get-entry-info",
+        G_CALLBACK(clipboards_get_entry_info_method_cb), cb, G_CONNECT_DEFAULT
     );
     g_signal_connect_object(
         iface, "handle-get-mime-type-data",
-        G_CALLBACK(get_mime_type_data_method_cb), cb, G_CONNECT_DEFAULT
+        G_CALLBACK(clipboards_get_mime_type_data_method_cb), cb,
+        G_CONNECT_DEFAULT
     );
     g_signal_connect_object(
         iface, "handle-get-entries-count",
-        G_CALLBACK(get_entries_count_method_cb), cb, G_CONNECT_DEFAULT
-    );
-    g_signal_connect_object(
-        iface, "handle-remove-entry", G_CALLBACK(remove_entry_method_cb), cb,
+        G_CALLBACK(clipboards_get_entries_count_method_cb), cb,
         G_CONNECT_DEFAULT
     );
     g_signal_connect_object(
-        iface, "handle-entry-exists", G_CALLBACK(entry_exists_method_cb), cb,
-        G_CONNECT_DEFAULT
+        iface, "handle-remove-entry",
+        G_CALLBACK(clipboards_remove_entry_method_cb), cb, G_CONNECT_DEFAULT
     );
     g_signal_connect_object(
-        iface, "handle-clear-history", G_CALLBACK(clear_history_method_cb), cb,
-        G_CONNECT_DEFAULT
+        iface, "handle-entry-exists",
+        G_CALLBACK(clipboards_entry_exists_method_cb), cb, G_CONNECT_DEFAULT
     );
     g_signal_connect_object(
-        iface, "handle-set-entry-data", G_CALLBACK(set_entry_data_method_cb),
-        cb, G_CONNECT_DEFAULT
+        iface, "handle-clear-history",
+        G_CALLBACK(clipboards_clear_history_method_cb), cb, G_CONNECT_DEFAULT
+    );
+    g_signal_connect_object(
+        iface, "handle-set-entry-data",
+        G_CALLBACK(clipboards_set_entry_data_method_cb), cb, G_CONNECT_DEFAULT
     );
     g_signal_connect_object(
         iface, "handle-remove-entry-data",
-        G_CALLBACK(remove_entry_data_method_cb), cb, G_CONNECT_DEFAULT
-    );
-    g_signal_connect_object(
-        iface, "handle-new-entry", G_CALLBACK(new_entry_method_cb), cb,
+        G_CALLBACK(clipboards_remove_entry_data_method_cb), cb,
         G_CONNECT_DEFAULT
     );
     g_signal_connect_object(
+        iface, "handle-new-entry", G_CALLBACK(clipboards_new_entry_method_cb),
+        cb, G_CONNECT_DEFAULT
+    );
+    g_signal_connect_object(
         iface, "handle-set-entry-starred",
-        G_CALLBACK(set_entry_starred_method_cb), cb, G_CONNECT_DEFAULT
+        G_CALLBACK(clipboards_set_entry_starred_method_cb), cb,
+        G_CONNECT_DEFAULT
     );
     g_signal_connect_object(
         iface, "handle-update-entry-last-used",
-        G_CALLBACK(update_entry_last_used_method_cb), cb, G_CONNECT_DEFAULT
+        G_CALLBACK(clipboards_update_entry_last_used_method_cb), cb,
+        G_CONNECT_DEFAULT
     );
     g_signal_connect_object(
         iface, "handle-list-entries-starred-status",
-        G_CALLBACK(list_entries_starred_status_method_cb), cb, G_CONNECT_DEFAULT
+        G_CALLBACK(clipboards_list_entries_starred_status_method_cb), cb,
+        G_CONNECT_DEFAULT
     );
 
     g_dbus_object_manager_server_export(
         CLIPBOARD_OBJ_MANAGER, G_DBUS_OBJECT_SKELETON(object)
     );
     g_object_unref(object);
-
-    g_dbus_object_manager_server_set_connection(
-        CLIPBOARD_OBJ_MANAGER, DBUS_SERVICE_CONNECTION
-    );
 }
 
 void

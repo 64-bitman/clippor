@@ -56,6 +56,9 @@
         <method name='ListClients'>
             <arg name='clients' type='as' direction='out'/>
         </method>
+        <method name='Rename'>
+            <arg name='name' type='s' direction='in'/>
+        </method>
         <method name='Remove'/>
     </interface>
     <interface name='com.github.clippor.wayland_connections'>

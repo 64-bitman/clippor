@@ -68,3 +68,5 @@ clippor_clipboard_clear_history(ClipporClipboard *self, GError **error);
 gboolean clippor_clipboard_set_entry(
     ClipporClipboard *self, ClipporEntry *entry, GError **error
 );
+
+char **clippor_clipboard_list_clients(ClipporClipboard *self, uint *size);

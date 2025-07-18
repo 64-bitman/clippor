@@ -7,8 +7,6 @@
 #include <stdio.h>
 #include <unistd.h>
 
-static char *compositor_argv[] = {"labwc", "-c", "NONE", "-d", NULL};
-
 /*
  * Kill all children processes on SIGABRT and SIGTRAP
  */
@@ -49,10 +47,12 @@ wayland_compositor_start(void)
     FILE *out;
     char **environment = g_get_environ();
 
+    char *cmdline[] = {"labwc", "-c", "NONE", "-d", NULL};
+
     environment =
         g_environ_setenv(environment, "WLR_BACKENDS", "headless", TRUE);
     ret = g_spawn_async_with_pipes(
-        NULL, compositor_argv, environment,
+        NULL, cmdline, environment,
         G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDIN_FROM_DEV_NULL |
             G_SPAWN_SEARCH_PATH,
         NULL, NULL, &wc->pid, NULL, NULL, &stderr_fd, &error

@@ -30,8 +30,6 @@ util_receive_data(int32_t fd, int timeout, gboolean checksum, GError **error);
 
 char *util_expand_env(const char *name);
 
-gboolean util_remove_dir(const char *path, GError **error);
-
 ClipporData *clippor_data_new(gboolean do_checksum);
 ClipporData *
 clippor_data_new_take(gconstpointer data, size_t size, gboolean do_checksum);
