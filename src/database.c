@@ -1155,38 +1155,3 @@ database_entry_id_exists(const char *id, GError **error)
     else
         STEP_ERROR(-1);
 }
-
-/*
- * Returns a null terminated ptr array of ids of entries that are either starred
- * or not starred depending on "starred" in the database.
- */
-GPtrArray *
-database_list_entries_starred_status(gboolean starred, GError **error)
-{
-    g_assert(error == NULL || *error == NULL);
-
-    const char *statement = "SELECT Id FROM Entries WHERE Starred = ?;";
-    sqlite3_stmt *stmt;
-    int ret;
-
-    PREPARE(NULL);
-
-    sqlite3_bind_int(stmt, 1, starred);
-
-    GPtrArray *arr = g_ptr_array_new_null_terminated(1, g_free, TRUE);
-
-    while ((ret = sqlite3_step(stmt)) == SQLITE_ROW)
-    {
-        const char *id = (const char *)sqlite3_column_text(stmt, 0);
-
-        g_ptr_array_add(arr, g_strdup(id));
-    }
-
-    if (ret != SQLITE_DONE)
-    {
-        g_ptr_array_unref(arr);
-        STEP_ERROR(NULL);
-    }
-
-    return arr;
-}

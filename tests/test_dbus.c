@@ -17,6 +17,8 @@ typedef struct
     GDBusObjectManager *wayland_cts;
 
     BusClippor *p_interface;
+    BusClipporWaylandConnection *wc_interface;
+    BusClipporWaylandConnection *wc2_interface;
 
     WaylandCompositor *wc;
     WaylandCompositor *wc2;
@@ -106,11 +108,37 @@ fixture_setup(TEST_ARGS)
         "/com/github/Clippor", NULL, &error
     );
     g_assert_no_error(error);
+
+    char *path;
+
+    path = replace_dbus_illegal_chars(
+        fixture->wc->display, "/com/github/Clippor/WaylandConnections"
+    );
+    fixture->wc_interface =
+        bus_clippor_wayland_connection_proxy_new_for_bus_sync(
+            G_BUS_TYPE_SESSION, G_DBUS_PROXY_FLAGS_NONE, "com.github.Clippor",
+            path, NULL, &error
+        );
+    g_free(path);
+    g_assert_no_error(error);
+
+    path = replace_dbus_illegal_chars(
+        fixture->wc2->display, "/com/github/Clippor/WaylandConnections"
+    );
+    fixture->wc2_interface =
+        bus_clippor_wayland_connection_proxy_new_for_bus_sync(
+            G_BUS_TYPE_SESSION, G_DBUS_PROXY_FLAGS_NONE, "com.github.Clippor",
+            path, NULL, &error
+        );
+    g_free(path);
+    g_assert_no_error(error);
 }
 
 static void
 fixture_teardown(TEST_ARGS)
 {
+    g_object_unref(fixture->wc_interface);
+    g_object_unref(fixture->wc2_interface);
     g_object_unref(fixture->p_interface);
     g_object_unref(fixture->primary);
     g_object_unref(fixture->clipboards);
@@ -226,6 +254,7 @@ test_dbus_clippor_add_wayland_connection(TEST_ARGS)
     bus_clippor_call_add_wayland_connection_sync(
         fixture->p_interface, wc->display, NULL, &error
     );
+    g_assert_no_error(error);
 
     server_instance_pause();
 
@@ -234,7 +263,7 @@ test_dbus_clippor_add_wayland_connection(TEST_ARGS)
     server_instance_run();
 
     context_dispatch();
-    
+
     g_autofree char *path = replace_dbus_illegal_chars(
         wc->display, "/com/github/Clippor/WaylandConnections"
     );
@@ -244,6 +273,36 @@ test_dbus_clippor_add_wayland_connection(TEST_ARGS)
         g_dbus_object_manager_get_object(fixture->wayland_cts, path);
 
     g_assert_nonnull(obj);
+}
+
+static void
+test_dbus_wayland_connections_list_seats(TEST_ARGS)
+{
+    GError *error = NULL;
+    char **names;
+
+    bus_clippor_wayland_connection_call_list_seats_sync(
+        fixture->wc_interface, &names, NULL, &error
+    );
+    g_assert_no_error(error);
+
+    g_assert_cmpint(g_strv_length(names), >, 0);
+
+    g_strfreev(names);
+}
+
+static void
+test_dbus_wayland_connections_connect_seat(TEST_ARGS)
+{
+    GError *error = NULL;
+    g_autoptr(WaylandCompositor) wc = wayland_compositor_start();
+
+    bus_clippor_call_add_wayland_connection_sync(
+        fixture->p_interface, wc->display, NULL, &error
+    );
+    g_assert_no_error(error);
+
+    context_dispatch();
 }
 
 int
@@ -271,6 +330,15 @@ main(int argc, char **argv)
     TEST_ADD(
         "/dbus/clippor/add-wayland-connection",
         test_dbus_clippor_add_wayland_connection
+    );
+
+    TEST_ADD(
+        "/dbus/wayland-connections/list-seats",
+        test_dbus_wayland_connections_list_seats
+    );
+    TEST_ADD(
+        "/dbus/wayland-connections/connect-seat",
+        test_dbus_wayland_connections_connect_seat
     );
 
     return g_test_run();

@@ -2,64 +2,18 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-Bus Object Introspection 1.0//EN" "http://standards.freedesktop.org/dbus/1.0/introspect.dtd">
 <node>
     <interface name='com.github.Clippor.Clipboard'>
-        <method name='GetEntryInfo'>
-            <arg name='index' type='x' direction='in'/>
-            <arg name='id' type='s' direction='out'/>
-            <arg name='creation_time' type='x' direction='out'/>
-            <arg name='last_used_time' type='x' direction='out'/>
-            <arg name='starred' type='b' direction='out'/>
-            <arg name='mime_types' type='as' direction='out'/>
+        <method name='GetEntries'>
+            <arg nmae='from' type='x' direction='in'/>
+            <arg name='to' type='x' direction='in'/>
+            <arg name='entries' type='aa{sv}' direction='out'/>
         </method>
-        <method name='GetMimeTypeData'>
-            <arg name='id' type='s' direction='in'/>
-            <arg name='mime_type' type='s' direction='in'/>
-            <arg name='fd' type='h' direction='in'/>
+        <method name='GetEntriesData'>
+            <arg name='ids' type='a{sas}' direction='in'/>
+            <arg name='files' type='a{sa{ss}}' direction='out'/>
         </method>
-        <method name='GetEntriesCount'>
-            <arg name='count' type='x' direction='out'/>
+        <method name='UpdateEntries'>
+            <arg name='entries' type='a{sa{sv}}' direction='in'/>
         </method>
-        <method name='RemoveEntry'>
-            <arg name='id' type='s' direction='in'/>
-        </method>
-        <method name='EntryExists'>
-            <arg name='id' type='s' direction='in'/>
-            <arg name='exists' type='b' direction='out'/>
-        </method>
-        <method name='ClearHistory'/>
-        <method name='SetEntryData'>
-            <arg name='id' type='s' direction='in'/>
-            <arg name='mime_types' type ='as' direction='in'/>
-            <arg name='fd' type='h' direction='out'/>
-        </method>
-        <method name='RemoveEntryData'>
-            <arg name='id' type='s' direction='in'/>
-            <arg name='mime_types' type ='as' direction='in'/>
-        </method>
-        <method name='NewEntry'>
-            <arg name='id' type='s' direction='out'/>
-        </method>
-        <method name='SetEntryStarred'>
-            <arg name='id' type='s' direction='in'/>
-            <arg name='starred' type='b' direction='in'/>
-        </method>
-        <method name='UpdateEntryLastUsed'>
-            <arg name='id' type='s' direction='in'/>
-        </method>
-        <method name='ListEntriesStarredStatus'>
-            <arg name='starred' type='b' direction='in'/>
-            <arg name='ids' type='as' direction='out'/>
-        </method>
-        <method name='SetCurrentEntry'>
-            <arg name='id' type='s' direction='in'/>
-            <arg name='clear' type='b' direction='in'/>
-        </method>
-        <method name='ListClients'>
-            <arg name='clients' type='as' direction='out'/>
-        </method>
-        <method name='Rename'>
-            <arg name='name' type='s' direction='in'/>
-        </method>
-        <method name='Remove'/>
     </interface>
     <interface name='com.github.Clippor.WaylandConnection'>
         <method name='ListSeats'>

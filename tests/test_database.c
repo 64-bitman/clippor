@@ -568,43 +568,6 @@ test_database_entry_id_exists(TEST_UARGS)
     g_assert_no_error(error);
 }
 
-/*
- * Test if a list of entries either starred or not starred is returned correctly
- */
-static void
-test_database_list_entries_starred_status(TEST_UARGS)
-{
-    GError *error = NULL;
-    g_autoptr(ClipporClipboard) cb = clippor_clipboard_new("Test");
-
-    g_autoptr(ClipporEntry) entry = clippor_entry_new(
-        NULL, -1, NULL, cb, CLIPPOR_SELECTION_TYPE_NONE, &error
-    );
-    g_assert_no_error(error);
-
-    clippor_entry_update_property(entry, &error, "starred", TRUE, NULL);
-    g_assert_no_error(error);
-
-    g_autoptr(ClipporEntry) entry2 = clippor_entry_new(
-        NULL, -1, NULL, cb, CLIPPOR_SELECTION_TYPE_NONE, &error
-    );
-    g_assert_no_error(error);
-
-    g_autoptr(GPtrArray) starred =
-        database_list_entries_starred_status(TRUE, &error);
-    g_assert_no_error(error);
-
-    g_autoptr(GPtrArray) unstarred =
-        database_list_entries_starred_status(FALSE, &error);
-    g_assert_no_error(error);
-
-    g_assert_cmpint(starred->len, ==, 1);
-    g_assert_cmpint(unstarred->len, ==, 1);
-
-    g_assert_cmpstr(starred->pdata[0], ==, clippor_entry_get_id(entry));
-    g_assert_cmpstr(unstarred->pdata[0], ==, clippor_entry_get_id(entry2));
-}
-
 int
 main(int argc, char **argv)
 {
@@ -639,10 +602,6 @@ main(int argc, char **argv)
     );
     TEST_ADD("/database/get-num-entries", test_database_get_num_entries);
     TEST_ADD("/database/entry-id-exists", test_database_entry_id_exists);
-    TEST_ADD(
-        "/database/list-entries-starred-status",
-        test_database_list_entries_starred_status
-    );
 
     return g_test_run();
 }

@@ -63,6 +63,3 @@ gboolean database_update_mime_type_row(
 int64_t database_get_num_entries(ClipporClipboard *cb, GError **error);
 
 int database_entry_id_exists(const char *id, GError **error);
-
-GPtrArray *
-database_list_entries_starred_status(gboolean starred, GError **error);
