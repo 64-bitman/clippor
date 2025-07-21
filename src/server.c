@@ -1,5 +1,6 @@
 #include "server.h"
 #include "config.h"
+#include "wayland-connection.h"
 #include <glib-unix.h>
 #include <glib.h>
 
@@ -57,12 +58,19 @@ server_start(const char *config_file, const char *data_directory)
 
     LOOP = g_main_loop_new(g_main_context_get_thread_default(), FALSE);
 
+    WaylandConnection *ct = wayland_connection_new("wayland-1");
+
+    wayland_connection_start(ct, NULL);
+    wayland_connection_install_source(ct, g_main_context_get_thread_default());
+
     // Handle signals so we can exit cleanly
     SIGNAL_SOURCE_IDS[0] = g_unix_signal_add(SIGINT, handle_signals, NULL);
     SIGNAL_SOURCE_IDS[1] = g_unix_signal_add(SIGTERM, handle_signals, NULL);
 
     g_main_loop_run(LOOP);
     g_main_loop_unref(LOOP);
+
+    g_object_unref(ct);
 
     server_free();
 
