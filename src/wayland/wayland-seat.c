@@ -127,21 +127,6 @@ wayland_seat_init(WaylandSeat *self)
     self->primary = wayland_selection_new(self, CLIPPOR_SELECTION_TYPE_PRIMARY);
 }
 
-static WaylandSelection *
-wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection)
-{
-    g_assert(WAYLAND_IS_SEAT(self));
-    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
-
-    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
-        return self->regular;
-    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
-        return self->primary;
-    else
-        // Shouldn't happen
-        return NULL;
-}
-
 static void
 wl_seat_listener_event_name(
     void *data, struct wl_seat *proxy G_GNUC_UNUSED, const char *name
@@ -199,6 +184,9 @@ wayland_seat_new(
     // Get name and capabilities
     wl_seat_add_listener(proxy, &wl_seat_listener, seat);
 
+    if (!wayland_connection_roundtrip(ct, error))
+        goto fail;
+
     // Starting listenining for data events
     seat->manager = wayland_connection_get_data_device_manager(ct);
 
@@ -217,8 +205,9 @@ wayland_seat_new(
 
     wayland_data_device_add_listener(seat->device, &data_device_listener, seat);
 
-    if (!wayland_connection_roundtrip(ct, error))
-        goto fail;
+    // Let the event loop do the display flushing and dispatching. This gives us
+    // time to have our selections be added to clipboards without missing out on
+    // the initial selection signal.
 
     // Not sure if this is supposed to happen...
     if (seat->name == NULL)
@@ -258,11 +247,14 @@ data_device_listener_event_data_offer(
     void *data, WaylandDataDevice *device G_GNUC_UNUSED, WaylandDataOffer *offer
 )
 {
-   WaylandSeat *seat = data;
+    WaylandSeat *seat = data;
 
     wayland_data_offer_add_listener(offer, &data_offer_listener, seat);
 }
 
+/*
+ * Don't do anything, let the individual selections do the stuff.
+ */
 static void
 data_device_listener_event_selection(
     void *data, WaylandDataDevice *device G_GNUC_UNUSED,
@@ -272,14 +264,7 @@ data_device_listener_event_selection(
     WaylandSeat *seat = data;
     WaylandSelection *wsel = wayland_seat_get_selection(seat, selection);
 
-
-    if (offer == NULL)
-    {
-        wayland_selection_set_offer(wsel, NULL);
-        return;
-    }
-
-    wayland_selection_set_offer(wsel, offer);
+    wayland_selection_new_offer(wsel, offer);
 }
 
 static void
@@ -355,4 +340,43 @@ wayland_seat_is_active(WaylandSeat *self)
     g_assert(WAYLAND_IS_SEAT(self));
 
     return self->active;
+}
+
+WaylandConnection *
+wayland_seat_get_connection(WaylandSeat *self)
+{
+    g_assert(WAYLAND_IS_SEAT(self));
+
+    return self->ct;
+}
+
+WaylandSelection *
+wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection)
+{
+    g_assert(WAYLAND_IS_SEAT(self));
+    g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
+
+    if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
+        return self->regular;
+    else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
+        return self->primary;
+    else
+        // Shouldn't happen
+        return NULL;
+}
+
+WaylandDataDeviceManager *
+wayland_seat_get_data_device_manager(WaylandSeat *self)
+{
+    g_assert(WAYLAND_IS_SEAT(self));
+
+    return self->manager;
+}
+
+WaylandDataDevice *
+wayland_seat_get_data_device(WaylandSeat *self)
+{
+    g_assert(WAYLAND_IS_SEAT(self));
+
+    return self->device;
 }

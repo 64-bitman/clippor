@@ -147,9 +147,7 @@ wayland_connection_dispose(GObject *object)
 {
     WaylandConnection *self = WAYLAND_CONNECTION(object);
 
-    g_hash_table_remove_all(self->gobjects.seats);
-
-    wayland_connection_uninstall_source(self);
+    g_clear_pointer(&self->gobjects.seats, g_hash_table_unref);
 
     G_OBJECT_CLASS(wayland_connection_parent_class)->dispose(object);
 }
@@ -159,9 +157,8 @@ wayland_connection_finalize(GObject *object)
 {
     WaylandConnection *self = WAYLAND_CONNECTION(object);
 
+    wayland_connection_uninstall_source(self);
     wayland_connection_stop(self);
-
-    g_hash_table_unref(self->gobjects.seats);
     g_free(self->display.name);
 
     G_OBJECT_CLASS(wayland_connection_parent_class)->finalize(object);
@@ -271,7 +268,7 @@ wl_seat_listener_event_global_remove(
 
     g_hash_table_iter_init(&iter, ct->gobjects.seats);
 
-    while (g_hash_table_iter_next(&iter, NULL, (gpointer *)&seat))
+    while (g_hash_table_iter_next(&iter, NULL, (void *)&seat))
     {
         if (wayland_seat_get_numerical_name(seat) == name)
             g_hash_table_iter_remove(&iter);
@@ -332,7 +329,8 @@ wayland_connection_stop(WaylandConnection *self)
     if (!self->active)
         return;
 
-    g_hash_table_remove_all(self->gobjects.seats);
+    if (self->gobjects.seats != NULL)
+        g_hash_table_remove_all(self->gobjects.seats);
 
     // Set these to NULL so that we know they are unavailable if we start back
     // up again.
@@ -368,6 +366,30 @@ wayland_connection_is_active(WaylandConnection *self)
     g_assert(WAYLAND_IS_CONNECTION(self));
 
     return self->active;
+}
+
+/*
+ * Get Wayland seat with given name from connection. If "name" is NULL, then use
+ * the first seat found. Returns NULL if no such seat exists.
+ */
+WaylandSeat *
+wayland_connection_get_seat(WaylandConnection *self, const char *name)
+{
+    g_assert(WAYLAND_IS_CONNECTION(self));
+
+    if (name == NULL)
+    {
+        GHashTableIter iter;
+        WaylandSeat *seat;
+
+        g_hash_table_iter_init(&iter, self->gobjects.seats);
+        if (g_hash_table_iter_next(&iter, NULL, (void *)&seat))
+            return seat;
+        else
+            return NULL;
+    }
+    else
+        return g_hash_table_lookup(self->gobjects.seats, name);
 }
 
 /*
@@ -669,7 +691,7 @@ fail:
 }
 
 static gboolean
-source_dispatch(GSource *self, GSourceFunc callback, gpointer user_data)
+source_dispatch(GSource *self, GSourceFunc callback, void *user_data)
 {
     WaylandConnectionSource *ws = (WaylandConnectionSource *)self;
     struct wl_display *display = ws->ct->display.proxy;
@@ -1118,23 +1140,21 @@ wayland_data_device_set_selection(
 )
 {
     g_assert(wayland_data_device_is_valid(self));
-    g_assert(wayland_data_source_is_valid(source));
-    g_assert(self->protocol == source->protocol);
+    g_assert(source == NULL || wayland_data_source_is_valid(source));
+    g_assert(source == NULL || self->protocol == source->protocol);
     g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
+
+    void *proxy = source == NULL ? NULL : source->proxy;
 
     if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
     {
         switch (self->protocol)
         {
         case WAYLAND_DATA_PROTOCOL_EXT:
-            ext_data_control_device_v1_set_selection(
-                self->proxy, source->proxy
-            );
+            ext_data_control_device_v1_set_selection(self->proxy, proxy);
             break;
         case WAYLAND_DATA_PROTOCOL_WLR:
-            zwlr_data_control_device_v1_set_selection(
-                self->proxy, source->proxy
-            );
+            zwlr_data_control_device_v1_set_selection(self->proxy, proxy);
             break;
         default:
             break;
@@ -1146,12 +1166,12 @@ wayland_data_device_set_selection(
         {
         case WAYLAND_DATA_PROTOCOL_EXT:
             ext_data_control_device_v1_set_primary_selection(
-                self->proxy, source->proxy
+                self->proxy, proxy
             );
             break;
         case WAYLAND_DATA_PROTOCOL_WLR:
             zwlr_data_control_device_v1_set_primary_selection(
-                self->proxy, source->proxy
+                self->proxy, proxy
             );
             break;
         default:
@@ -1201,7 +1221,7 @@ wayland_data_offer_receive(
     }
 }
 
-const GPtrArray *
+GPtrArray *
 wayland_data_offer_get_mime_types(WaylandDataOffer *self)
 {
     g_assert(wayland_data_offer_is_valid(self));

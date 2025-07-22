@@ -1,5 +1,7 @@
 #pragma once
 
+#include "clippor-entry.h"
+#include <gio/gio.h>
 #include <glib-object.h>
 #include <glib.h>
 
@@ -22,22 +24,27 @@ struct _ClipporSelectionClass
 {
     GObjectClass parent_class;
 
-    const GPtrArray *(*get_mime_types)(ClipporSelection *self);
-    void (*start_get_data)(
-        ClipporSelection *self, const char *mime_type, GByteArray *buf
+    GPtrArray *(*get_mime_types)(ClipporSelection *self);
+    GInputStream *(*get_data)(
+        ClipporSelection *self, const char *mime_type, GError **error
     );
-    void (*cancel_get_data)(ClipporSelection *self);
-    gboolean (*set_data)(
-        ClipporSelection *self, GHashTable *mime_types, GError **error
+    gboolean (*update)(
+        ClipporSelection *self, ClipporEntry *entry, gboolean is_source,
+        GError **error
     );
     gboolean (*is_owned)(ClipporSelection *self);
+    gboolean (*is_inert)(ClipporSelection *self);
 };
 
-const GPtrArray *clippor_selection_get_mime_types(ClipporSelection *self);
-void clippor_selection_start_get_data(
-    ClipporSelection *self, const char *mime_type, GByteArray *buf
+GPtrArray *clippor_selection_get_mime_types(ClipporSelection *self);
+GInputStream *clippor_selection_get_data(
+    ClipporSelection *self, const char *mime_type, GError **error
 );
-gboolean clippor_selection_set_data(
-    ClipporSelection *self, GHashTable *mime_types, GError **error
+gboolean clippor_selection_update(
+    ClipporSelection *self, ClipporEntry *entry, gboolean is_source,
+    GError **error
 );
 gboolean clippor_selection_is_owned(ClipporSelection *self);
+gboolean clippor_selection_is_inert(ClipporSelection *self);
+
+ClipporEntry *clippor_selection_get_entry(ClipporSelection *self);

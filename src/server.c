@@ -1,8 +1,13 @@
 #include "server.h"
+#include "clippor-clipboard.h"
+#include "clippor-database.h"
 #include "config.h"
 #include "wayland-connection.h"
 #include <glib-unix.h>
 #include <glib.h>
+#include <sqlite3.h>
+
+G_DEFINE_QUARK(DATABASE_ERROR, database_error)
 
 static uint SIGNAL_SOURCE_IDS[2] = {0};
 static GMainLoop *LOOP;
@@ -14,7 +19,7 @@ static Config *CONFIG;
 
 // Handle SIGTERM and SIGINT signals
 static gboolean
-handle_signals(gpointer user_data G_GNUC_UNUSED)
+handle_signals(void *user_data G_GNUC_UNUSED)
 {
     g_message("Exiting...");
 
@@ -58,19 +63,42 @@ server_start(const char *config_file, const char *data_directory)
 
     LOOP = g_main_loop_new(g_main_context_get_thread_default(), FALSE);
 
+    ClipporDatabase *db =
+        clippor_database_new(NULL, CLIPPOR_DATABASE_DEFAULT, &error);
+
+    if (db == NULL)
+    {
+        g_warning("Failed initializing database: %s", error->message);
+    }
+
+    ClipporClipboard *cb = clippor_clipboard_new("Default", db);
     WaylandConnection *ct = wayland_connection_new("wayland-1");
+
+    if (!clippor_clipboard_load(cb, &error))
+    {
+        g_warning("%s", error->message);
+    }
 
     wayland_connection_start(ct, NULL);
     wayland_connection_install_source(ct, g_main_context_get_thread_default());
 
-    // Handle signals so we can exit cleanly
-    SIGNAL_SOURCE_IDS[0] = g_unix_signal_add(SIGINT, handle_signals, NULL);
+    WaylandSeat *seat = wayland_connection_get_seat(ct, NULL);
+    ClipporSelection *sel = CLIPPOR_SELECTION(
+        wayland_seat_get_selection(seat, CLIPPOR_SELECTION_TYPE_REGULAR)
+    );
+
+    clippor_clipboard_add_selection(cb, sel);
+
+        // Handle signals so we can exit cleanly
+        SIGNAL_SOURCE_IDS[0] = g_unix_signal_add(SIGINT, handle_signals, NULL);
     SIGNAL_SOURCE_IDS[1] = g_unix_signal_add(SIGTERM, handle_signals, NULL);
 
     g_main_loop_run(LOOP);
     g_main_loop_unref(LOOP);
 
+    g_object_unref(db);
     g_object_unref(ct);
+    g_object_unref(cb);
 
     server_free();
 

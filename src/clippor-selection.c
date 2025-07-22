@@ -1,4 +1,5 @@
 #include "clippor-selection.h"
+#include "clippor-entry.h"
 #include <glib-object.h>
 #include <glib.h>
 
@@ -12,6 +13,7 @@ G_DEFINE_ENUM_TYPE(
 typedef struct
 {
     ClipporSelectionType type;
+    ClipporEntry *entry;
 } ClipporSelectionPrivate;
 
 G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE(
@@ -21,6 +23,7 @@ G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE(
 typedef enum
 {
     PROP_TYPE = 1,
+    PROP_ENTRY,
     N_PROPERTIES
 } ClipporSelectionProperty;
 
@@ -48,6 +51,13 @@ clippor_selection_set_property(
     case PROP_TYPE:
         priv->type = g_value_get_enum(value);
         break;
+    case PROP_ENTRY:
+        if (priv->entry == g_value_get_object(value))
+            break;
+        if (priv->entry != NULL)
+            g_object_unref(priv->entry);
+        priv->entry = g_value_dup_object(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
         break;
@@ -68,6 +78,9 @@ clippor_selection_get_property(
     case PROP_TYPE:
         g_value_set_enum(value, priv->type);
         break;
+    case PROP_ENTRY:
+        g_value_set_object(value, priv->entry);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
         break;
@@ -77,6 +90,12 @@ clippor_selection_get_property(
 static void
 clippor_selection_dispose(GObject *object)
 {
+    ClipporSelection *self = CLIPPOR_SELECTION(object);
+    ClipporSelectionPrivate *priv =
+        clippor_selection_get_instance_private(self);
+
+    g_clear_object(&priv->entry);
+
     G_OBJECT_CLASS(clippor_selection_parent_class)->dispose(object);
 }
 
@@ -101,6 +120,10 @@ clippor_selection_class_init(ClipporSelectionClass *class)
         "type", "Type", "Type of selection", CLIPPOR_TYPE_SELECTION_TYPE,
         CLIPPOR_SELECTION_TYPE_NONE, G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY
     );
+    obj_properties[PROP_ENTRY] = g_param_spec_object(
+        "entry", "Entry", "Entry that selection is set to", CLIPPOR_TYPE_ENTRY,
+        G_PARAM_READWRITE
+    );
 
     g_object_class_install_properties(
         gobject_class, N_PROPERTIES, obj_properties
@@ -122,7 +145,7 @@ clippor_selection_init(ClipporSelection *self G_GNUC_UNUSED)
  * Get mime types of current selection, with ptr array being owned by the
  * selection object.
  */
-const GPtrArray *
+GPtrArray *
 clippor_selection_get_mime_types(ClipporSelection *self)
 {
     g_assert(CLIPPOR_IS_SELECTION(self));
@@ -132,43 +155,43 @@ clippor_selection_get_mime_types(ClipporSelection *self)
 }
 
 /*
- * Start receiving data for mime type from selection and write it to "buf". This
- * operation can be asynchronous and be able to be cancelled
+ * Return a input stream where data for mime type will be written to. This
+ * allows for reading data to be asynchronous.
  */
-void
-clippor_selection_start_get_data(
-    ClipporSelection *self, const char *mime_type, GByteArray *buf
+GInputStream *
+clippor_selection_get_data(
+    ClipporSelection *self, const char *mime_type, GError **error
 )
 {
     g_assert(CLIPPOR_IS_SELECTION(self));
     g_assert(mime_type != NULL);
-    g_assert(buf != NULL);
 
     ClipporSelectionClass *class = CLIPPOR_SELECTION_GET_CLASS(self);
-    return class->start_get_data(self, mime_type, buf);
+    return class->get_data(self, mime_type, error);
 }
 
 /*
  * Set the selection for the selection object.
  *
- * The hash table consists of mime type keys where each value is the data id for
- * the given data of the mime type. If a NULL pointer is passed then the
- * selection is cleared.
+ * If "is_source" is TRUE, then the selection update came from the selection
+ * object. The selection object should update its internal state but not
+ * explicity set the selection.
  *
- * To get the actual data the database will be queried.
+ *  If "entry" is NULL, the selection is cleared.
  *
- * The function will take a new reference to the hash table
+ * When data needs to be sent, it should be done asynchronously
  */
 gboolean
-clippor_selection_set_data(
-    ClipporSelection *self, GHashTable *mime_types, GError **error
+clippor_selection_update(
+    ClipporSelection *self, ClipporEntry *entry, gboolean is_source,
+    GError **error
 )
 {
     g_assert(CLIPPOR_IS_SELECTION(self));
     g_assert(error == NULL || *error == NULL);
 
     ClipporSelectionClass *class = CLIPPOR_SELECTION_GET_CLASS(self);
-    return class->set_data(self, mime_types, error);
+    return class->update(self, entry, is_source, error);
 }
 
 /*
@@ -181,4 +204,27 @@ clippor_selection_is_owned(ClipporSelection *self)
 
     ClipporSelectionClass *class = CLIPPOR_SELECTION_GET_CLASS(self);
     return class->is_owned(self);
+}
+
+/*
+ * Return TRUE if selection object is inert
+ */
+gboolean
+clippor_selection_is_inert(ClipporSelection *self)
+{
+    g_assert(CLIPPOR_IS_SELECTION(self));
+
+    ClipporSelectionClass *class = CLIPPOR_SELECTION_GET_CLASS(self);
+    return class->is_inert(self);
+}
+
+ClipporEntry *
+clippor_selection_get_entry(ClipporSelection *self)
+{
+    g_assert(CLIPPOR_IS_SELECTION(self));
+
+    ClipporSelectionPrivate *priv =
+        clippor_selection_get_instance_private(self);
+
+    return priv->entry;
 }

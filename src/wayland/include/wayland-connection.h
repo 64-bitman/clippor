@@ -63,6 +63,8 @@ void wayland_connection_stop(WaylandConnection *self);
 
 int wayland_connection_get_fd(WaylandConnection *self);
 gboolean wayland_connection_is_active(WaylandConnection *self);
+WaylandSeat *
+wayland_connection_get_seat(WaylandConnection *self, const char *name);
 
 gboolean wayland_connection_flush(WaylandConnection *self, GError **error);
 int wayland_connection_dispatch(WaylandConnection *self, GError **error);
@@ -123,4 +125,4 @@ void wayland_data_source_offer(WaylandDataSource *self, const char *mime_type);
 void wayland_data_offer_receive(
     WaylandDataOffer *self, const char *mime_type, int fd
 );
-const GPtrArray *wayland_data_offer_get_mime_types(WaylandDataOffer *self);
+GPtrArray *wayland_data_offer_get_mime_types(WaylandDataOffer *self);
