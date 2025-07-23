@@ -1,4 +1,4 @@
-sources += files('server.c', 'config.c', 'clippor-selection.c', 'clippor-clipboard.c', 'clippor-database.c', 'clippor-entry.c')
+sources += files('clippor-config.c', 'clippor-selection.c', 'clippor-clipboard.c', 'clippor-database.c', 'clippor-entry.c', 'clippor-server.c')
 includes += include_directories('include')
 
 subdir('external')

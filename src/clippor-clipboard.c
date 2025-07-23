@@ -153,12 +153,12 @@ clippor_clipboard_init(ClipporClipboard *self)
  * like wl_clip_persist.
  */
 ClipporClipboard *
-clippor_clipboard_new(const char *label, ClipporDatabase *db)
+clippor_clipboard_new(const char *label)
 {
+    g_assert(label != NULL);
+
     ClipporClipboard *cb =
         g_object_new(CLIPPOR_TYPE_CLIPBOARD, "label", label, NULL);
-
-    cb->db = g_object_ref(db);
 
     return cb;
 }
@@ -173,6 +173,9 @@ clippor_clipboard_update_selections(
     ClipporClipboard *self, ClipporSelection *sel
 )
 {
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(sel == NULL || CLIPPOR_IS_SELECTION(sel));
+
     // Update selections
     for (uint i = 0; i < self->selections->len; i++)
     {
@@ -188,6 +191,7 @@ clippor_clipboard_update_selections(
 
         if (!clippor_selection_update(s, self->entry, s == sel, &error))
         {
+            g_assert(error != NULL);
             g_warning("%s", error->message);
             g_error_free(error);
             continue;
@@ -195,28 +199,32 @@ clippor_clipboard_update_selections(
     }
 }
 
-/*
- * Load first entry from database if there is one into the clipboard. If
- * clipboard doesn't have a database then the call is ignored.
- */
 gboolean
-clippor_clipboard_load(ClipporClipboard *self, GError **error)
+clippor_clipboard_set_database(
+    ClipporClipboard *self, ClipporDatabase *db, GError **error
+)
 {
-    if (self->db == NULL)
-        return TRUE;
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(CLIPPOR_IS_DATABASE(db));
+    g_assert(error == NULL || *error == NULL);
 
-    if (self->entry != NULL)
-        g_object_unref(self->entry);
+    if (self->db != NULL)
+        g_object_unref(self->db);
+    self->db = g_object_ref(db);
 
-    self->entry = clippor_database_deserialize_entry_at_index(
-        self->db, self->label, 0, error
-    );
+    self->entry =
+        clippor_database_deserialize_entry_at_index(db, self->label, 0, error);
 
-    if (self->entry == NULL)
+    // Ignore if database is just empty
+    if (self->entry == NULL &&
+        (*error)->code != CLIPPOR_DATABASE_ERROR_ROW_NOT_EXIST)
     {
         g_prefix_error(error, "Failed loading clipboard '%s': ", self->label);
         return FALSE;
     }
+
+    clippor_clipboard_update_selections(self, NULL);
+
     return TRUE;
 }
 
@@ -229,14 +237,24 @@ selection_data_received(ClipporSelection *sel, ClipporClipboard *cb)
     g_assert(CLIPPOR_IS_SELECTION(sel));
     g_assert(CLIPPOR_IS_CLIPBOARD(cb));
 
-    // Update database if we attached to one
+    // Update database if we are attached to one
     if (cb->db != NULL)
     {
         GError *error = NULL;
 
         if (!clippor_database_serialize_entry(cb->db, cb->entry, &error))
         {
-            g_warning("%s", error->message);
+            g_assert(error != NULL);
+            g_warning("Failed serializing entry: %s", error->message);
+            g_error_free(error);
+        }
+
+        if (!clippor_database_trim_entries(
+                cb->db, cb->label, cb->max_entries, &error
+            ))
+        {
+            g_assert(error != NULL);
+            g_warning("Failed trimming database: %s", error->message);
             g_error_free(error);
         }
     }
@@ -335,6 +353,9 @@ fail:
     g_object_unref(cb);
 }
 
+/*
+ * Called when there is a new selection.
+ */
 static void
 selection_update(ClipporSelection *sel, ClipporClipboard *cb)
 {

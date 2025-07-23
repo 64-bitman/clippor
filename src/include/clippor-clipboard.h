@@ -15,9 +15,11 @@ typedef enum
     CLIPPOR_CLIPBOARD_ERROR_RECEIVE,
 } ClipporClipboardError;
 
-ClipporClipboard *clippor_clipboard_new(const char *label, ClipporDatabase *db);
+ClipporClipboard *clippor_clipboard_new(const char *label);
 
-gboolean clippor_clipboard_load(ClipporClipboard *self, GError **error);
+gboolean clippor_clipboard_set_database(
+    ClipporClipboard *self, ClipporDatabase *db, GError **error
+);
 
 void
 clippor_clipboard_add_selection(ClipporClipboard *self, ClipporSelection *sel);

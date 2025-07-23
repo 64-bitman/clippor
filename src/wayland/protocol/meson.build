@@ -12,6 +12,6 @@ foreach name : protocols
         command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@']
     )
 
-    includes += include_directories('.')
-    link_with += static_library(name, code, header, dependencies: wl_dep)
+    wl_includes += include_directories('.')
+    wl_link_with += static_library(name, code, header, dependencies: wl_dep)
 endforeach

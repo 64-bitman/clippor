@@ -1,4 +1,4 @@
-#include "server.h"
+#include "clippor-server.h"
 #include <glib.h>
 
 static gboolean opt_version;
@@ -47,8 +47,36 @@ main(int argc, char **argv)
     int ret = EXIT_SUCCESS;
 
     if (opt_server)
-        if (!server_start(opt_config_file, opt_data_dir))
-            ret = EXIT_FAILURE;
+    {
+        g_autoptr(ClipporConfig) cfg;
+        g_autoptr(ClipporDatabase) db;
+
+        cfg = clippor_config_new_file(opt_config_file, &error);
+
+        if (cfg == NULL)
+        {
+            g_warning("%s", error->message);
+            g_error_free(error);
+        }
+
+        db = clippor_database_new(
+            opt_data_dir, CLIPPOR_DATABASE_DEFAULT, &error
+        );
+
+        if (db == NULL)
+        {
+            g_warning("%s", error->message);
+            g_error_free(error);
+        }
+
+        g_autoptr(ClipporServer) server = clippor_server_new(cfg, db);
+
+        if (!clippor_server_start(server, &error))
+        {
+            g_warning("%s", error->message);
+            g_error_free(error);
+        }
+    }
 
     g_free(opt_config_file);
     g_free(opt_data_dir);

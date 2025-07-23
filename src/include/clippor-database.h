@@ -46,3 +46,6 @@ ClipporEntry *clippor_database_deserialize_entry_at_index(
 ClipporEntry *clippor_database_deserialize_entry_with_id(
     ClipporDatabase *self, const char *id, GError **error
 );
+gboolean clippor_database_trim_entries(
+    ClipporDatabase *self, const char *cb, int64_t n, GError **error
+);

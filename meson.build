@@ -22,17 +22,17 @@ add_project_arguments(
   language: 'c'
   )
 
-wl_dep = dependency('wayland-client')
 glib_dep = dependency('glib-2.0')
 gio_dep = dependency('gio-2.0')
 gio_unix_dep = dependency('gio-unix-2.0')
+gmodule_dep = dependency('gmodule-2.0')
 sqlite_dep = dependency('sqlite3')
 
 deps = [
-  wl_dep,
   glib_dep,
   gio_dep,
   gio_unix_dep,
+  gmodule_dep,
   sqlite_dep
   ]
 
@@ -48,5 +48,6 @@ clippor = executable(
   sources,
   include_directories: includes,
   dependencies: deps,
-  link_with: link_with
+  link_with: link_with,
+  export_dynamic: true
   )

@@ -218,18 +218,11 @@ clippor_database_new(const char *data_directory, uint flags, GError **error)
         if (ret != SQLITE_OK)                                                  \
             PREPARE_ERROR(r);                                                  \
     } while (FALSE)
-#define PREPARE2(r)                                                            \
-    do                                                                         \
-    {                                                                          \
-        ret = sqlite3_prepare_v2(self->handle, statement2, -1, &stmt2, 0);     \
-        if (ret != SQLITE_OK)                                                  \
-            PREPARE_ERROR(r);                                                  \
-    } while (FALSE)
 #define STEP_NO_ROW(r)                                                         \
     do                                                                         \
     {                                                                          \
         ret = sqlite3_step(stmt);                                              \
-        if (ret != SQLITE_OK)                                                  \
+        if (ret != SQLITE_DONE)                                                \
             STEP_ERROR(r);                                                     \
         sqlite3_finalize(stmt);                                                \
     } while (FALSE)
@@ -328,8 +321,8 @@ clippor_database_unref_data(
     g_assert(data_id != NULL);
     g_assert(error == NULL || *error == NULL);
 
-    const char *statement = "UPDATE Data"
-                            "SET Ref_count = Ref_count - 1"
+    const char *statement = "UPDATE Data "
+                            "SET Ref_count = Ref_count - 1 "
                             "WHERE Data_id = ? RETURNING Ref_count;";
     sqlite3_stmt *stmt;
     int ret;
@@ -359,7 +352,7 @@ clippor_database_unref_data(
                 g_unlink(path);
             }
 
-            statement = "DELETE From Data WHERE Data_id = ?;";
+            statement = "DELETE FROM Data WHERE Data_id = ?;";
 
             PREPARE(FALSE);
 
@@ -370,23 +363,27 @@ clippor_database_unref_data(
 
         return TRUE;
     }
-    else
+    else if (ret != SQLITE_DONE)
         STEP_ERROR(FALSE);
+
+    sqlite3_finalize(stmt);
+    return TRUE;
 }
 
 /*
  * Removes mime type rows in the database with id that doesn't exist in the hash
- * table.
+ * table. If "all" is TRUE then just removes all of them and ignores
+ * "mime_types".
  */
 static gboolean
 clippor_database_cleanup_mime_types(
-    ClipporDatabase *self, const char *id, GHashTable *mime_types,
+    ClipporDatabase *self, const char *id, GHashTable *mime_types, gboolean all,
     GError **error
 )
 {
     g_assert(CLIPPOR_IS_DATABASE(self));
     g_assert(id != NULL);
-    g_assert(mime_types != NULL);
+    g_assert(all || mime_types != NULL);
     g_assert(error == NULL || *error == NULL);
 
     const char *statement =
@@ -398,22 +395,29 @@ clippor_database_cleanup_mime_types(
     int ret;
 
     PREPARE(FALSE);
-    PREPARE2(FALSE);
+
+    ret = sqlite3_prepare_v2(self->handle, statement2, -1, &stmt2, NULL);
+
+    if (ret != SQLITE_OK)
+    {
+        sqlite3_finalize(stmt);
+        PREPARE_ERROR(FALSE);
+    }
 
     sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
 
-    while ((ret = sqlite3_step(stmt)) == SQLITE_OK)
+    while ((ret = sqlite3_step(stmt)) == SQLITE_ROW)
     {
         const char *mime_type = (const char *)sqlite3_column_text(stmt, 0);
         const char *data_id = (const char *)sqlite3_column_text(stmt, 1);
 
-        if (!g_hash_table_contains(mime_types, mime_type))
+        if (all || !g_hash_table_contains(mime_types, mime_type))
         {
             // Delete mime type row first to avoid foriegn key restriction
             sqlite3_bind_text(stmt2, 1, id, -1, SQLITE_STATIC);
             sqlite3_bind_text(stmt2, 2, mime_type, -1, SQLITE_STATIC);
 
-            ret = sqlite3_step(stmt);
+            ret = sqlite3_step(stmt2);
 
             sqlite3_clear_bindings(stmt2);
             sqlite3_reset(stmt2);
@@ -433,7 +437,7 @@ clippor_database_cleanup_mime_types(
 
     sqlite3_finalize(stmt2);
 
-    if (ret == SQLITE_ERROR)
+    if (ret != SQLITE_DONE)
         STEP_ERROR(FALSE);
 
     // STEP_ERROR finalizes stmt
@@ -476,7 +480,9 @@ clippor_database_serialize_mime_types(
     }
 
     // Remove deleted mime types first
-    if (!clippor_database_cleanup_mime_types(self, id, mime_types, error))
+    if (!clippor_database_cleanup_mime_types(
+            self, id, mime_types, FALSE, error
+        ))
     {
         g_prefix_error(error, "Failed serializing mime types: ");
         return FALSE;
@@ -545,7 +551,7 @@ clippor_database_serialize_entry(
 
     const char *statement = "BEGIN TRANSACTION;";
     char *err_msg;
-    sqlite3_stmt *stmt = NULL;
+    sqlite3_stmt *stmt;
     int ret;
 
     EXEC(FALSE);
@@ -602,10 +608,7 @@ clippor_database_serialize_entry(
     if (!clippor_database_serialize_mime_types(
             self, id, clippor_entry_get_mime_types(entry), error
         ))
-    {
-        g_prefix_error_literal(error, "Failed serializing entry: ");
         goto fail;
-    }
 
     gboolean f_ret = TRUE;
 
@@ -815,4 +818,121 @@ clippor_database_deserialize_entry_with_id(
     sqlite3_finalize(stmt);
 
     return NULL;
+}
+
+/*
+ * Remove older entries in the datbaase until "n" entries are left.
+ */
+gboolean
+clippor_database_trim_entries(
+    ClipporDatabase *self, const char *cb, int64_t n, GError **error
+)
+{
+    g_assert(CLIPPOR_IS_DATABASE(self));
+    g_assert(cb != NULL);
+    g_assert(error == NULL || *error == NULL);
+
+    const char *statement = "BEGIN TRANSACTION;", *statement2;
+    char *err_msg;
+    sqlite3_stmt *stmt, *stmt2;
+    int ret;
+
+    EXEC(FALSE);
+
+    statement = "SELECT Id FROM Entries "
+                "WHERE Position NOT IN ("
+                "   SELECT Position FROM Entries "
+                "   ORDER BY Position DESC "
+                "   LIMIT ?"
+                ");";
+    statement2 = "DELETE FROM Entries WHERE Id = ?;";
+
+    ret = sqlite3_prepare_v2(self->handle, statement, -1, &stmt, NULL);
+
+    if (ret != SQLITE_OK)
+    {
+        g_set_error(
+            error, (clippor_database_error_quark()),
+            CLIPPOR_DATABASE_ERROR_PREPARE,
+            "Failed preparing statement '%s': %s", statement,
+            sqlite3_errmsg(self->handle)
+        );
+        goto fail;
+    }
+
+    ret = sqlite3_prepare_v2(self->handle, statement2, -1, &stmt2, NULL);
+
+    if (ret != SQLITE_OK)
+    {
+        sqlite3_finalize(stmt);
+        g_set_error(
+            error, (clippor_database_error_quark()),
+            CLIPPOR_DATABASE_ERROR_PREPARE,
+            "Failed preparing statement '%s': %s", statement2,
+            sqlite3_errmsg(self->handle)
+        );
+        goto fail;
+    }
+
+    sqlite3_bind_int64(stmt, 1, n + 1);
+
+    while ((ret = sqlite3_step(stmt)) == SQLITE_ROW)
+    {
+        const char *id = (const char *)sqlite3_column_text(stmt, 0);
+
+        // Remove mime types first to avoid foreign key restriction
+        if (!clippor_database_cleanup_mime_types(self, id, NULL, TRUE, error))
+        {
+loop_fail:
+            sqlite3_finalize(stmt);
+            sqlite3_finalize(stmt2);
+            goto fail;
+        }
+
+        // Remove row
+        sqlite3_bind_text(stmt2, 1, id, -1, SQLITE_STATIC);
+        ret = sqlite3_step(stmt2);
+
+        if (ret != SQLITE_DONE)
+        {
+            g_set_error(
+                error, (clippor_database_error_quark()),
+                CLIPPOR_DATABASE_ERROR_STEP,
+                "Failed stepping statement '%s': %s", statement2,
+                sqlite3_errmsg(self->handle)
+            );
+            goto loop_fail;
+        }
+
+        sqlite3_clear_bindings(stmt2);
+        sqlite3_reset(stmt2);
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_finalize(stmt2);
+
+    if (ret != SQLITE_DONE)
+    {
+        g_set_error(
+            error, (clippor_database_error_quark()),
+            CLIPPOR_DATABASE_ERROR_STEP, "Failed stepping statement '%s': %s",
+            statement, sqlite3_errmsg(self->handle)
+        );
+        goto fail;
+    }
+
+    gboolean f_ret = TRUE;
+
+    if (FALSE)
+fail:
+        f_ret = FALSE;
+
+    if (f_ret)
+        statement = "COMMIT;";
+    else
+        statement = "ROLLBACK TRANSACTION;";
+
+    EXEC(FALSE);
+
+    return f_ret;
 }
