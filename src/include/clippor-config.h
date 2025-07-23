@@ -1,18 +1,16 @@
 #pragma once
 
-#include "tomlc17.h"
 #include <glib.h>
 
 typedef struct
 {
+    // Don't use a hash table since clipboard labels can be changed by the user
+    // when the program is running.
     GPtrArray *clipboards;
 
-    toml_result_t result;
-
-    GHashTable *modules; // Each key is the name of the module and the value is
-                         // the toml_datum_t for its configuration
-
-    grefcount ref_count;
+    GPtrArray *wayland_connections;
+    GHashTable *wayland_seat_map; // Each key is a clipboard label and the value
+                                  // is a ptr array of seat names.
 } ClipporConfig;
 
 typedef enum

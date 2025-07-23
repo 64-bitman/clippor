@@ -23,5 +23,8 @@ gboolean clippor_clipboard_set_database(
 
 void
 clippor_clipboard_add_selection(ClipporClipboard *self, ClipporSelection *sel);
+void clippor_clipboard_connect_selection(
+    ClipporClipboard *self, ClipporSelection *sel
+);
 
 const char *clippor_clipboard_get_label(ClipporClipboard *self);

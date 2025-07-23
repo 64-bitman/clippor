@@ -31,7 +31,7 @@ struct _ClipporClipboard
 
         GPtrArray *mime_types;
         uint index;
-    } recieve_ctx;
+    } receive_ctx;
     gboolean receiving;
 
     ClipporEntry *entry; // Current entry that all selections are set to
@@ -222,8 +222,10 @@ clippor_clipboard_set_database(
         g_prefix_error(error, "Failed loading clipboard '%s': ", self->label);
         return FALSE;
     }
+    g_clear_error(error);
 
-    clippor_clipboard_update_selections(self, NULL);
+    if (self->entry != NULL)
+        clippor_clipboard_update_selections(self, NULL);
 
     return TRUE;
 }
@@ -274,7 +276,7 @@ selection_data_async_callback(
     ssize_t r = g_input_stream_read_finish(stream, result, &error);
 
     const char *mime_type =
-        cb->recieve_ctx.mime_types->pdata[cb->recieve_ctx.index];
+        cb->receive_ctx.mime_types->pdata[cb->receive_ctx.index];
 
     if (r == -1)
     {
@@ -289,23 +291,25 @@ selection_data_async_callback(
     {
         g_clear_object(&stream);
         // EOF recieved, go onto next mime type if possible
-        cb->recieve_ctx.index++;
+        cb->receive_ctx.index++;
 
-        GBytes *bytes = g_byte_array_free_to_bytes(cb->recieve_ctx.arr);
+        GBytes *bytes = g_byte_array_free_to_bytes(cb->receive_ctx.arr);
+
+        cb->receive_ctx.arr = NULL;
 
         clippor_entry_add_mime_type(cb->entry, mime_type, bytes);
         g_bytes_unref(bytes);
 
-        if (cb->recieve_ctx.index == cb->recieve_ctx.mime_types->len)
+        if (cb->receive_ctx.index == cb->receive_ctx.mime_types->len)
         {
             // Received all mime types, we are done
             cb->receiving = FALSE;
 
-            selection_data_received(cb->recieve_ctx.sel, cb);
+            selection_data_received(cb->receive_ctx.sel, cb);
 
-            g_ptr_array_unref(cb->recieve_ctx.mime_types);
-            g_object_unref(cb->recieve_ctx.cancel);
-            g_object_unref(cb->recieve_ctx.sel);
+            g_ptr_array_unref(cb->receive_ctx.mime_types);
+            g_object_unref(cb->receive_ctx.cancel);
+            g_object_unref(cb->receive_ctx.sel);
             g_object_unref(cb);
 
             return;
@@ -313,10 +317,10 @@ selection_data_async_callback(
 
         // Reinitialize values to use new mime type and get input stream for it
         const char *new_mime_type =
-            cb->recieve_ctx.mime_types->pdata[cb->recieve_ctx.index];
+            cb->receive_ctx.mime_types->pdata[cb->receive_ctx.index];
 
         stream = clippor_selection_get_data(
-            cb->recieve_ctx.sel, new_mime_type, &error
+            cb->receive_ctx.sel, new_mime_type, &error
         );
 
         if (stream == NULL)
@@ -325,15 +329,15 @@ selection_data_async_callback(
             goto fail;
         }
         else
-            cb->recieve_ctx.arr = g_byte_array_new();
+            cb->receive_ctx.arr = g_byte_array_new();
     }
     else
         // Still more data to receive
-        g_byte_array_append(cb->recieve_ctx.arr, cb->recieve_ctx.buf, r);
+        g_byte_array_append(cb->receive_ctx.arr, cb->receive_ctx.buf, r);
 
     g_input_stream_read_async(
-        stream, cb->recieve_ctx.buf, 4096, G_PRIORITY_HIGH,
-        cb->recieve_ctx.cancel, selection_data_async_callback, cb
+        stream, cb->receive_ctx.buf, 4096, G_PRIORITY_HIGH,
+        cb->receive_ctx.cancel, selection_data_async_callback, cb
     );
 
     return;
@@ -345,11 +349,12 @@ fail:
     // Clean out any progress we made
     g_clear_object(&cb->entry);
 
-    g_byte_array_unref(cb->recieve_ctx.arr);
-    g_ptr_array_unref(cb->recieve_ctx.mime_types);
+    if (cb->receive_ctx.arr != NULL)
+        g_byte_array_unref(cb->receive_ctx.arr);
+    g_ptr_array_unref(cb->receive_ctx.mime_types);
 
-    g_object_unref(cb->recieve_ctx.cancel);
-    g_object_unref(cb->recieve_ctx.sel);
+    g_object_unref(cb->receive_ctx.cancel);
+    g_object_unref(cb->receive_ctx.sel);
     g_object_unref(cb);
 }
 
@@ -364,7 +369,7 @@ selection_update(ClipporSelection *sel, ClipporClipboard *cb)
     // Check if we are already receiving data, if so cancel it
     if (cb->receiving)
     {
-        g_cancellable_cancel(cb->recieve_ctx.cancel);
+        g_cancellable_cancel(cb->receive_ctx.cancel);
 
         // Cancellable in GIO is async, so iterate the context
         while (cb->receiving)
@@ -389,17 +394,17 @@ selection_update(ClipporSelection *sel, ClipporClipboard *cb)
 
     cb->entry = clippor_entry_new(cb);
 
-    cb->recieve_ctx.sel = g_object_ref(sel);
-    cb->recieve_ctx.cancel = g_cancellable_new();
-    cb->recieve_ctx.mime_types = g_ptr_array_ref(mime_types);
-    cb->recieve_ctx.index = 0;
-    cb->recieve_ctx.arr = g_byte_array_new();
+    cb->receive_ctx.sel = g_object_ref(sel);
+    cb->receive_ctx.cancel = g_cancellable_new();
+    cb->receive_ctx.mime_types = g_ptr_array_ref(mime_types);
+    cb->receive_ctx.index = 0;
+    cb->receive_ctx.arr = g_byte_array_new();
     cb->receiving = TRUE;
 
     // Start receiving data async
     g_input_stream_read_async(
-        stream, cb->recieve_ctx.buf, 4096, G_PRIORITY_HIGH,
-        cb->recieve_ctx.cancel, selection_data_async_callback, g_object_ref(cb)
+        stream, cb->receive_ctx.buf, 4096, G_PRIORITY_HIGH,
+        cb->receive_ctx.cancel, selection_data_async_callback, g_object_ref(cb)
     );
 }
 
@@ -408,6 +413,9 @@ clippor_clipboard_add_selection(ClipporClipboard *self, ClipporSelection *sel)
 {
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
     g_assert(CLIPPOR_IS_SELECTION(sel));
+
+    if (g_ptr_array_find(self->selections, sel, NULL))
+        return;
 
     g_ptr_array_add(self->selections, g_object_ref(sel));
 
@@ -421,6 +429,27 @@ clippor_clipboard_add_selection(ClipporClipboard *self, ClipporSelection *sel)
     }
 
     // Listen for new updates
+    g_signal_connect_object(
+        sel, "update", G_CALLBACK(selection_update), self, G_CONNECT_DEFAULT
+    );
+}
+
+/*
+ * Same as clippor_clipboard_add_selection but doesn't update selection
+ */
+void
+clippor_clipboard_connect_selection(
+    ClipporClipboard *self, ClipporSelection *sel
+)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+    g_assert(CLIPPOR_IS_SELECTION(sel));
+
+    if (g_ptr_array_find(self->selections, sel, NULL))
+        return;
+
+    g_ptr_array_add(self->selections, g_object_ref(sel));
+
     g_signal_connect_object(
         sel, "update", G_CALLBACK(selection_update), self, G_CONNECT_DEFAULT
     );

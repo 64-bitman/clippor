@@ -1,4 +1,5 @@
 #include "clippor-server.h"
+#include "modules.h"
 #include <glib.h>
 
 static gboolean opt_version;
@@ -46,8 +47,11 @@ main(int argc, char **argv)
 
     int ret = EXIT_SUCCESS;
 
+    modules_init();
+
     if (opt_server)
     {
+
         g_autoptr(ClipporConfig) cfg;
         g_autoptr(ClipporDatabase) db;
 
@@ -57,6 +61,7 @@ main(int argc, char **argv)
         {
             g_warning("%s", error->message);
             g_error_free(error);
+            return EXIT_FAILURE;
         }
 
         db = clippor_database_new(
@@ -67,6 +72,7 @@ main(int argc, char **argv)
         {
             g_warning("%s", error->message);
             g_error_free(error);
+            return EXIT_FAILURE;
         }
 
         g_autoptr(ClipporServer) server = clippor_server_new(cfg, db);
@@ -75,11 +81,15 @@ main(int argc, char **argv)
         {
             g_warning("%s", error->message);
             g_error_free(error);
+            return EXIT_FAILURE;
         }
     }
 
     g_free(opt_config_file);
     g_free(opt_data_dir);
+
+    // Make sure this is always called last to avoid bugs
+    modules_uninit();
 
     return ret;
 }

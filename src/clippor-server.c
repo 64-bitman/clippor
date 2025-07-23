@@ -1,9 +1,15 @@
 #include "clippor-server.h"
+#include "clippor-clipboard.h"
 #include "clippor-config.h"
 #include "clippor-database.h"
+#include "modules.h"
+#include "wayland-connection.h"
 #include <glib-object.h>
 #include <glib-unix.h>
 #include <glib.h>
+#include <gmodule.h>
+
+G_DEFINE_QUARK(SERVER_ERROR, server_error)
 
 struct _ClipporServer
 {
@@ -15,10 +21,6 @@ struct _ClipporServer
     uint signals[2]; // Source tags for each signal
     GMainContext *context;
     GMainLoop *loop; // Optional
-
-    // Don't use a hash table since clipboard labels can be changed by the user
-    // when the program is running.
-    GPtrArray *clipboards;
 };
 
 G_DEFINE_TYPE(ClipporServer, clippor_server, G_TYPE_OBJECT)
@@ -28,7 +30,6 @@ clippor_server_dispose(GObject *object)
 {
     ClipporServer *self = CLIPPOR_SERVER(object);
 
-    g_clear_pointer(&self->clipboards, g_ptr_array_unref);
     g_clear_object(&self->db);
     g_clear_pointer(&self->cfg, clippor_config_unref);
 
@@ -51,9 +52,8 @@ clippor_server_class_init(ClipporServerClass *class)
 }
 
 static void
-clippor_server_init(ClipporServer *self)
+clippor_server_init(ClipporServer *self G_GNUC_UNUSED)
 {
-    self->clipboards = g_ptr_array_new_with_free_func(g_object_unref);
 }
 
 /*
@@ -67,20 +67,36 @@ clippor_server_new(ClipporConfig *cfg, ClipporDatabase *db)
 
     ClipporServer *server = g_object_new(CLIPPOR_TYPE_SERVER, NULL);
 
-    server->db = g_object_ref(db);
+    server->db = db == NULL ? NULL : g_object_ref(db);
     server->cfg = clippor_config_ref(cfg);
 
     return server;
 }
 
-/*
- * Open all modules specified in the config and get their symbols
- */
 static gboolean
 clippor_server_prepare(ClipporServer *self, GError **error)
 {
-    g_assert(CLIPPOR_IS_SERVER(self));
-    g_assert(error == NULL || *error == NULL);
+    if (self->db != NULL)
+    {
+        // Prepare clipboards
+        for (uint i = 0; i < self->cfg->clipboards->len; i++)
+        {
+            ClipporClipboard *cb = self->cfg->clipboards->pdata[i];
+
+            if (!clippor_clipboard_set_database(cb, self->db, error))
+                return FALSE;
+        }
+    }
+    if (WAYLAND_FUNCS.available)
+    {
+        // Bind wayland connections to main context
+        for (uint i = 0; i < self->cfg->wayland_connections->len; i++)
+        {
+            WaylandConnection *ct = self->cfg->wayland_connections->pdata[i];
+
+            WAYLAND_FUNCS.connection_install_source(ct, self->context);
+        }
+    }
 
     return TRUE;
 }
@@ -112,7 +128,7 @@ clippor_server_start(ClipporServer *self, GError **error)
 
     if (!clippor_server_prepare(self, error))
     {
-        g_prefix_error_literal(error, "Failed starting server: ");
+        g_prefix_error_literal(error, "Failed starting server");
         return FALSE;
     }
 
@@ -125,6 +141,8 @@ clippor_server_start(ClipporServer *self, GError **error)
     self->signals[1] = g_unix_signal_add(
         SIGTERM, (GSourceFunc)clippor_server_handle_signal, self
     );
+
+    g_debug("Starting server");
 
     g_main_loop_run(self->loop);
     g_main_loop_unref(self->loop);

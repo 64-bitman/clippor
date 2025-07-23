@@ -137,8 +137,9 @@ clippor_database_new(const char *data_directory, uint flags, GError **error)
         ");"
         ""
         "CREATE TABLE IF NOT EXISTS Version ("
-        "   Db_version INTEGER NOT NULL DEFAULT 0"
-        ");";
+        "   Db_version INTEGER UNIQUE NOT NULL"
+        ");"
+        "INSERT OR IGNORE INTO Version (Db_version) VALUES (0)";
 
     if (ret != SQLITE_OK)
     {

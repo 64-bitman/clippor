@@ -1,5 +1,6 @@
 #include "clippor-config.h"
 #include "clippor-clipboard.h"
+#include "modules.h"
 #include "tomlc17.h"
 #include <glib.h>
 
@@ -17,11 +18,9 @@ clippor_config_free(ClipporConfig *self)
 {
     g_assert(self != NULL);
 
-    g_ptr_array_unref(self->clipboards);
-    g_hash_table_unref(self->modules);
-    toml_free(self->result);
-
-    g_free(self);
+    g_clear_pointer(&self->clipboards, g_ptr_array_unref);
+    g_clear_pointer(&self->wayland_connections, g_ptr_array_unref);
+    g_clear_pointer(&self->wayland_seat_map, g_hash_table_unref);
 }
 
 /*
@@ -92,12 +91,12 @@ clippor_config_populate(
         if (allowed_mime_types.type != TOML_UNKNOWN &&
             allowed_mime_types.type != TOML_ARRAY)
             TOML_ERROR(
-                "Option 'allowed_mime_types' in 'clipboards' is not an array"
+                "Array 'allowed_mime_types' in 'clipboards' is not an array"
             );
         if (mime_type_groups.type != TOML_UNKNOWN &&
             mime_type_groups.type != TOML_ARRAY)
             TOML_ERROR(
-                "Option 'mime_type_groups' in 'clipboards' is not an array"
+                "Array 'mime_type_groups' in 'clipboards' is not an array"
             );
 
         ClipporClipboard *cb = clippor_clipboard_new(label.u.str.ptr);
@@ -109,25 +108,137 @@ clippor_config_populate(
     }
 
 skip_clipboards:;
-    // Parse configuration for each module
-    toml_datum_t modules = toml_seek(result.toptab, "modules");
+    // Parse configuration for Wayland
+    toml_datum_t wayland_displays =
+        toml_seek(result.toptab, "wayland_displays");
 
-    if (modules.type == TOML_UNKNOWN)
-        goto skip_modules;
+    if (!WAYLAND_FUNCS.available || wayland_displays.type == TOML_UNKNOWN)
+        goto skip_wayland;
 
-    if (modules.type != TOML_TABLE)
-        TOML_ERROR("Option 'modules' is not a table");
+    if (wayland_displays.type != TOML_ARRAY)
+        TOML_ERROR("Array 'wayland_displays' is not an array");
 
-    for (int i = 0; i < modules.u.tab.size; i++)
+    for (int i = 0; i < wayland_displays.u.arr.size; i++)
     {
-        const char *name = modules.u.tab.key[i];
-        toml_datum_t module = modules.u.tab.value[i];
+        toml_datum_t wayland_display = wayland_displays.u.arr.elem[i];
 
-        g_hash_table_insert(self->modules, g_strdup(name), &module);
+        toml_datum_t display = toml_seek(wayland_display, "display");
+        toml_datum_t seats = toml_seek(wayland_display, "seats");
+
+        if (display.type != TOML_STRING)
+            TOML_ERROR(
+                "Option 'display' in 'wayland_displays' is not a string or "
+                "does not exist"
+            );
+        if (seats.type != TOML_UNKNOWN && seats.type != TOML_ARRAY)
+            TOML_ERROR("Array 'seats' in 'wayland_displays' is not an array");
+
+        WaylandConnection *ct = WAYLAND_FUNCS.connection_new(display.u.str.ptr);
+
+        if (!WAYLAND_FUNCS.connection_start(ct, NULL))
+        {
+            g_debug(
+                "Wayland display '%s' failed to start, ignoring",
+                display.u.str.ptr
+            );
+            g_object_unref(ct);
+            continue;
+        }
+
+        g_ptr_array_add(self->wayland_connections, ct);
+
+        // Connect seat(s) to clipboards
+        if (seats.type == TOML_UNKNOWN)
+            continue;
+
+        for (int k = 0; k < seats.u.arr.size; k++)
+        {
+            toml_datum_t seat = seats.u.arr.elem[k];
+
+            if (seat.type != TOML_TABLE)
+                TOML_ERROR(
+                    "Table 'seats' in 'wayland_displays' should only contain "
+                    "tables"
+                );
+
+            toml_datum_t name = toml_seek(seat, "seat");
+            toml_datum_t regular = toml_seek(seat, "regular");
+            toml_datum_t primary = toml_seek(seat, "primary");
+
+            if (name.type != TOML_STRING)
+                TOML_ERROR(
+                    "Option 'seat' in 'seats' is not a string or does not exist"
+                );
+            if (regular.type != TOML_UNKNOWN && regular.type != TOML_TABLE)
+                TOML_ERROR("Table 'regular' in 'seat' is not a table");
+            if (primary.type != TOML_UNKNOWN && primary.type != TOML_TABLE)
+                TOML_ERROR("Table 'primary' in 'seat' is not a table");
+
+            WaylandSeat *seat_obj =
+                WAYLAND_FUNCS.connection_get_seat(ct, name.u.str.ptr);
+
+            if (regular.type != TOML_UNKNOWN)
+            {
+                toml_datum_t cb_label = toml_seek(regular, "clipboard");
+
+                if (cb_label.type != TOML_STRING)
+                    TOML_ERROR(
+                        "Option 'clipboard' in 'regular' is not a string or "
+                        "does not exist"
+                    );
+
+                WaylandSelection *sel = WAYLAND_FUNCS.seat_get_selection(
+                    seat_obj, CLIPPOR_SELECTION_TYPE_REGULAR
+                );
+
+                for (uint r = 0; r < self->clipboards->len; r++)
+                {
+                    ClipporClipboard *cb = self->clipboards->pdata[r];
+                    if (g_strcmp0(
+                            clippor_clipboard_get_label(cb), cb_label.u.str.ptr
+                        ) == 0)
+                    {
+                        clippor_clipboard_connect_selection(
+                            cb, CLIPPOR_SELECTION(sel)
+                        );
+                        break;
+                    }
+                }
+            }
+
+            if (primary.type != TOML_UNKNOWN)
+            {
+                toml_datum_t cb_label = toml_seek(primary, "clipboard");
+
+                if (cb_label.type != TOML_STRING)
+                    TOML_ERROR(
+                        "Option 'clipboard' in 'primary' is not a string or "
+                        "does not exist"
+                    );
+
+                WaylandSelection *sel = WAYLAND_FUNCS.seat_get_selection(
+                    seat_obj, CLIPPOR_SELECTION_TYPE_PRIMARY
+                );
+
+                for (uint r = 0; r < self->clipboards->len; r++)
+                {
+                    ClipporClipboard *cb = self->clipboards->pdata[r];
+                    if (g_strcmp0(
+                            clippor_clipboard_get_label(cb), cb_label.u.str.ptr
+                        ) == 0)
+                    {
+                        clippor_clipboard_connect_selection(
+                            cb, CLIPPOR_SELECTION(sel)
+                        );
+                        break;
+                    }
+                }
+            }
+        }
     }
-skip_modules:
+skip_wayland:
 
-    self->result = result;
+    toml_free(result);
     return TRUE;
 fail:
     g_set_error(
@@ -143,12 +254,13 @@ fail:
 static ClipporConfig *
 clippor_config_init(void)
 {
-    ClipporConfig *cfg = g_new(ClipporConfig, 1);
+    ClipporConfig *cfg = g_rc_box_new(ClipporConfig);
 
     cfg->clipboards = g_ptr_array_new_with_free_func(g_object_unref);
-    cfg->modules = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-
-    g_ref_count_init(&cfg->ref_count);
+    cfg->wayland_connections = g_ptr_array_new_with_free_func(g_object_unref);
+    cfg->wayland_seat_map = g_hash_table_new_full(
+        g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_ptr_array_unref
+    );
 
     return cfg;
 }
@@ -184,6 +296,7 @@ clippor_config_new_file(const char *config_file, GError **error)
     if (!clippor_config_populate(cfg, path, TRUE, error))
     {
         g_prefix_error_literal(error, "Failed parsing configuration file: ");
+        clippor_config_unref(cfg);
         return NULL;
     }
 
@@ -195,7 +308,7 @@ clippor_config_ref(ClipporConfig *self)
 {
     g_assert(self != NULL);
 
-    g_ref_count_inc(&self->ref_count);
+    g_rc_box_acquire(self);
 
     return self;
 }
@@ -205,6 +318,5 @@ clippor_config_unref(ClipporConfig *self)
 {
     g_assert(self != NULL);
 
-    if (g_ref_count_dec(&self->ref_count))
-        clippor_config_free(self);
+    g_rc_box_release_full(self, (GDestroyNotify)clippor_config_free);
 }

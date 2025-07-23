@@ -3,6 +3,7 @@ wl_includes = [include_directories('include')]
 wl_link_with = []
 
 wl_includes += includes
+includes += wl_includes
 
 wl_dep = dependency('wayland-client')
 
@@ -13,5 +14,6 @@ wayland_module = shared_module(
     wl_sources,
     include_directories: wl_includes,
     dependencies: [wl_dep, glib_dep, gio_unix_dep],
+    link_with: wl_link_with,
     install: false
     )
