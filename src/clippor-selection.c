@@ -142,8 +142,7 @@ clippor_selection_init(ClipporSelection *self G_GNUC_UNUSED)
 }
 
 /*
- * Get mime types of current selection, with ptr array being owned by the
- * selection object.
+ * Get mime types of current selection, creates new reference to array.
  */
 GPtrArray *
 clippor_selection_get_mime_types(ClipporSelection *self)
@@ -177,7 +176,7 @@ clippor_selection_get_data(
  * object. The selection object should update its internal state but not
  * explicity set the selection.
  *
- *  If "entry" is NULL, the selection is cleared.
+ * If "entry" is NULL, the selection is cleared.
  *
  * When data needs to be sent, it should be done asynchronously
  */

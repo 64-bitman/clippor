@@ -18,7 +18,7 @@ struct _ClipporServer
     ClipporConfig *cfg;
     ClipporDatabase *db;
 
-    uint signals[2]; // Source tags for each signal
+    uint signals[2]; // Source ids for each signal
     GMainContext *context;
     GMainLoop *loop; // Optional
 };

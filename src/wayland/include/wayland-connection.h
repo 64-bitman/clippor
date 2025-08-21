@@ -126,3 +126,11 @@ void wayland_data_offer_receive(
     WaylandDataOffer *self, const char *mime_type, int fd
 );
 GPtrArray *wayland_data_offer_get_mime_types(WaylandDataOffer *self);
+
+// Cleanup
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(
+    WaylandDataDeviceManager, wayland_data_device_manager_discard
+)
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(WaylandDataDevice, wayland_data_device_destroy);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(WaylandDataSource, wayland_data_source_destroy);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(WaylandDataOffer, wayland_data_offer_destroy);

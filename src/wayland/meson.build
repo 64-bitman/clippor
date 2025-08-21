@@ -17,3 +17,13 @@ wayland_module = shared_module(
     link_with: wl_link_with,
     install: false
     )
+
+# Used by tests
+wayland_library = shared_library(
+    'clippor-wayland-lib',
+    wl_sources,
+    include_directories: wl_includes,
+    dependencies: [wl_dep, glib_dep, gio_unix_dep],
+    link_with: wl_link_with,
+    override_options: ['b_lundef=false']
+    )

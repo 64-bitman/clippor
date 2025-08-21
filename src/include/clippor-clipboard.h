@@ -28,3 +28,5 @@ void clippor_clipboard_connect_selection(
 );
 
 const char *clippor_clipboard_get_label(ClipporClipboard *self);
+
+ClipporEntry *clippor_clipboard_get_entry(ClipporClipboard *self);

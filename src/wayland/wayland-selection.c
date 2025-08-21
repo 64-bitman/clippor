@@ -238,7 +238,7 @@ wayland_selection_own(WaylandSelection *self, GError **error)
 
         g_hash_table_iter_init(&iter, clippor_entry_get_mime_types(entry));
 
-        while (g_hash_table_iter_next(&iter, (void *)&mime_type, NULL))
+        while (g_hash_table_iter_next(&iter, (void **)&mime_type, NULL))
             wayland_data_source_offer(self->source, mime_type);
 
         self->is_source = TRUE;
@@ -285,7 +285,7 @@ wayland_selection_new_offer(WaylandSelection *self, WaylandDataOffer *offer)
 
     if (self->is_source)
     {
-        // we are the source client, ignore and destroy the offer
+        // We are the source client, ignore and destroy the offer
         wayland_data_offer_destroy(offer);
         self->offer = NULL;
         return;
@@ -326,8 +326,11 @@ clippor_selection_handler_get_mime_types(ClipporSelection *self)
     if (!wsel->active)
         return NULL;
 
-    return wsel->offer == NULL ? NULL
-                               : wayland_data_offer_get_mime_types(wsel->offer);
+    return wsel->offer == NULL
+               ? NULL
+               : g_ptr_array_ref(
+                     wayland_data_offer_get_mime_types(wsel->offer)
+                 );
 }
 
 static GInputStream *
@@ -345,7 +348,7 @@ clippor_selection_handler_get_data(
     {
         g_set_error(
             error, WAYLAND_SELECTION_ERROR, WAYLAND_SELECTION_ERROR_INERT,
-            "Failed receiving data: Selection is inert"
+            "Selection is inert"
         );
         return NULL;
     }
@@ -354,40 +357,36 @@ clippor_selection_handler_get_data(
     {
         g_set_error(
             error, WAYLAND_SELECTION_ERROR, WAYLAND_SELECTION_ERROR_CLEARED,
-            "Failed receiving data: Selection is cleared"
+            "Selection is cleared"
         );
         return NULL;
     }
 
     // Create pipe
-    GUnixPipe pipe;
+    int fds[2];
 
-    if (!g_unix_pipe_open(&pipe, O_CLOEXEC, error))
+    if (!g_unix_open_pipe(fds, O_CLOEXEC, error))
     {
-        g_prefix_error_literal(error, "Failed receiving data: ");
+        g_prefix_error_literal(error, "Failed opening pipe: ");
         return NULL;
     }
 
-    wayland_data_offer_receive(
-        wsel->offer, mime_type, g_unix_pipe_get(&pipe, G_UNIX_PIPE_END_WRITE)
-    );
+    wayland_data_offer_receive(wsel->offer, mime_type, fds[1]);
 
     // Close our write-end because we don't need it
-    g_unix_pipe_close(&pipe, G_UNIX_PIPE_END_WRITE, NULL);
+    close(fds[1]);
 
     if (!wayland_connection_flush(
             wayland_seat_get_connection(wsel->seat), error
         ))
     {
-        g_prefix_error_literal(error, "Failed receiving data: ");
+        g_prefix_error_literal(error, "Failed flushing Wayland connection: ");
 
-        g_unix_pipe_close(&pipe, G_UNIX_PIPE_END_READ, NULL);
+        close(fds[0]);
         return FALSE;
     }
 
-    GInputStream *stream = g_unix_input_stream_new(
-        g_unix_pipe_get(&pipe, G_UNIX_PIPE_END_READ), TRUE
-    );
+    GInputStream *stream = g_unix_input_stream_new(fds[0], TRUE);
 
     return stream;
 }
@@ -405,6 +404,7 @@ clippor_selection_handler_update(
 )
 {
     g_assert(WAYLAND_IS_SELECTION(self));
+    g_assert(entry == NULL || CLIPPOR_IS_ENTRY(entry));
     g_assert(error == NULL || *error == NULL);
 
     WaylandSelection *wsel = WAYLAND_SELECTION(self);
@@ -432,7 +432,7 @@ clippor_selection_handler_update(
 static gboolean
 clippor_selection_handler_is_owned(ClipporSelection *self)
 {
-    g_assert(CLIPPOR_IS_SELECTION(self));
+    g_assert(WAYLAND_IS_SELECTION(self));
 
     WaylandSelection *wsel = WAYLAND_SELECTION(self);
 
@@ -442,7 +442,7 @@ clippor_selection_handler_is_owned(ClipporSelection *self)
 static gboolean
 clippor_selection_handler_is_inert(ClipporSelection *self)
 {
-    g_assert(CLIPPOR_IS_SELECTION(self));
+    g_assert(WAYLAND_IS_SELECTION(self));
 
     WaylandSelection *wsel = WAYLAND_SELECTION(self);
 

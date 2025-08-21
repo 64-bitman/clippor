@@ -370,26 +370,31 @@ wayland_connection_is_active(WaylandConnection *self)
 
 /*
  * Get Wayland seat with given name from connection. If "name" is NULL, then use
- * the first seat found. Returns NULL if no such seat exists.
+ * the first seat found. Returns NULL if no such seat exists. Returns a new
+ * reference to the seat.
  */
 WaylandSeat *
 wayland_connection_get_seat(WaylandConnection *self, const char *name)
 {
     g_assert(WAYLAND_IS_CONNECTION(self));
 
+    WaylandSeat *seat;
+
     if (name == NULL)
     {
         GHashTableIter iter;
-        WaylandSeat *seat;
 
         g_hash_table_iter_init(&iter, self->gobjects.seats);
         if (g_hash_table_iter_next(&iter, NULL, (void *)&seat))
-            return seat;
+            return g_object_ref(seat);
         else
             return NULL;
     }
-    else
-        return g_hash_table_lookup(self->gobjects.seats, name);
+    seat = g_hash_table_lookup(self->gobjects.seats, name);
+
+    if (seat == NULL)
+        return NULL;
+    return g_object_ref(seat);
 }
 
 /*
@@ -634,7 +639,10 @@ source_prepare(GSource *self, int *timeout_)
 
     if (!wayland_connection_flush(ws->ct, &error))
     {
-        g_warning("Failed preparing source: %s", error->message);
+        g_warning(
+            "Failed preparing source for Wayland display '%s': %s",
+            ws->ct->display.name, error->message
+        );
         g_error_free(error);
 
         wl_display_cancel_read(display);

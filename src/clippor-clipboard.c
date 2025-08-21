@@ -282,7 +282,7 @@ selection_data_async_callback(
     {
         // An error occured or operation was cancelled
         if (error->code != G_IO_ERROR_CANCELLED)
-            g_warning(
+            g_debug(
                 "Input stream did not finish properly: %s", error->message
             );
         goto fail;
@@ -325,7 +325,7 @@ selection_data_async_callback(
 
         if (stream == NULL)
         {
-            g_warning("Input stream callback failed: %s", error->message);
+            g_debug("Failed creating input stream: %s", error->message);
             goto fail;
         }
         else
@@ -376,7 +376,7 @@ selection_update(ClipporSelection *sel, ClipporClipboard *cb)
             g_main_context_iteration(g_main_context_get_thread_default(), TRUE);
     }
 
-    GPtrArray *mime_types = clippor_selection_get_mime_types(sel);
+    g_autoptr(GPtrArray) mime_types = clippor_selection_get_mime_types(sel);
     GInputStream *stream =
         clippor_selection_get_data(sel, mime_types->pdata[0], &error);
 
@@ -461,4 +461,15 @@ clippor_clipboard_get_label(ClipporClipboard *self)
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
 
     return self->label;
+}
+
+/*
+ * Return current entry. Entry object is owned by the clipboard
+ */
+ClipporEntry *
+clippor_clipboard_get_entry(ClipporClipboard *self)
+{
+    g_assert(CLIPPOR_IS_CLIPBOARD(self));
+
+    return self->entry;
 }
