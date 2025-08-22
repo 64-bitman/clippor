@@ -1,3 +1,10 @@
+wl_copy = find_program('wl-copy')
+wl_paste = find_program('wl-paste')
+
+if not wl_copy.found() or not wl_paste.found()
+    subdir_done()
+endif
+
 tests = ['clipboard', 'wayland']
 
 foreach suffix : tests

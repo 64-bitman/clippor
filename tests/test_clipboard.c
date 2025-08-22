@@ -46,7 +46,12 @@ test_clipboard_update(TEST_ARGS)
     dummy_selection_install_source(rsel, fixture->context);
     dummy_selection_install_source(psel, fixture->context);
 
-    dummy_selection_copy(rsel, "hello", "text/plain", "TEXT", NULL);
+    // Copy a large amount so that the clipboard has to receive the data in
+    // multiple chunks.
+    char buf[8192] = {'a'};
+    buf[8191] = 0;
+
+    dummy_selection_copy(rsel, buf, "text/plain", "TEXT", NULL);
 
     main_context_dispatch(fixture->context);
 
@@ -55,13 +60,24 @@ test_clipboard_update(TEST_ARGS)
     g_assert_nonnull(entry);
 
     // Check if other selection is synced
-    g_assert_cmpstr(dummy_selection_paste(psel, "text/plain"), ==, "hello");
-    g_assert_cmpstr(dummy_selection_paste(psel, "TEXT"), ==, "hello");
-    g_assert_cmpstr(dummy_selection_paste(rsel, "text/plain"), ==, "hello");
-    g_assert_cmpstr(dummy_selection_paste(rsel, "TEXT"), ==, "hello");
+    g_assert_cmpstr(dummy_selection_paste(psel, "text/plain"), ==, buf);
+    g_assert_cmpstr(dummy_selection_paste(psel, "TEXT"), ==, buf);
+    g_assert_cmpstr(dummy_selection_paste(rsel, "text/plain"), ==, buf);
+    g_assert_cmpstr(dummy_selection_paste(rsel, "TEXT"), ==, buf);
 
-    // Check if selection that copied the text is not owned by us
+    // Check if the clipboard doesn't steal ownership of the selection(s)
     g_assert_false(clippor_selection_is_owned(CLIPPOR_SELECTION(rsel)));
+
+    // Selection source client should be the clipboard
+    g_assert_true(clippor_selection_is_owned(CLIPPOR_SELECTION(psel)));
+}
+
+/*
+ * Test if clipboard sets selection after it is cleared.
+ */
+static void
+test_clipboard_persists(TEST_ARGS)
+{
 }
 
 int
@@ -74,6 +90,7 @@ main(int argc, char *argv[])
     test_setup();
 
     TEST("/clipboard/update", test_clipboard_update);
+    TEST("/clipboard/persists", test_clipboard_persists);
 
     return g_test_run();
 }
