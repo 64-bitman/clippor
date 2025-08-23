@@ -118,11 +118,8 @@ wayland_seat_class_init(WaylandSeatClass *class)
 }
 
 static void
-wayland_seat_init(WaylandSeat *self)
+wayland_seat_init(WaylandSeat *self G_GNUC_UNUSED)
 {
-    // Initialize selections
-    self->regular = wayland_selection_new(self, CLIPPOR_SELECTION_TYPE_REGULAR);
-    self->primary = wayland_selection_new(self, CLIPPOR_SELECTION_TYPE_PRIMARY);
 }
 
 static void
@@ -173,6 +170,7 @@ wayland_seat_new(
     g_assert(error == NULL || *error == NULL);
 
     WaylandSeat *seat = g_object_new(WAYLAND_TYPE_SEAT, NULL);
+    ClipporSelectionTypeFlags sels = CLIPPOR_SELECTION_TYPE_NONE;
 
     seat->ct = ct;
     seat->proxy = proxy;
@@ -186,7 +184,15 @@ wayland_seat_new(
         goto fail;
 
     // Starting listenining for data events
-    seat->manager = wayland_connection_get_data_device_manager(ct);
+    seat->manager = wayland_connection_get_data_device_manager(ct, &sels);
+
+    // Initialize selections
+    if (sels & CLIPPOR_SELECTION_TYPE_REGULAR)
+        seat->regular =
+            wayland_selection_new(seat, CLIPPOR_SELECTION_TYPE_REGULAR);
+    if (sels & CLIPPOR_SELECTION_TYPE_PRIMARY)
+        seat->primary =
+            wayland_selection_new(seat, CLIPPOR_SELECTION_TYPE_PRIMARY);
 
     if (seat->manager == NULL)
     {
@@ -211,8 +217,7 @@ wayland_seat_new(
     if (seat->name == NULL)
     {
         g_set_error_literal(
-            error, WAYLAND_ERROR, WAYLAND_ERROR_CREATE_SEAT,
-            "Seat name is NULL"
+            error, WAYLAND_ERROR, WAYLAND_ERROR_CREATE_SEAT, "Seat name is NULL"
         );
         goto fail;
     }
@@ -350,7 +355,7 @@ wayland_seat_get_connection(WaylandSeat *self)
 }
 
 /*
- * Returns a new reference
+ * Returns a new reference. May return NULL if seat doesn't support selection.
  */
 WaylandSelection *
 wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection)
@@ -359,9 +364,9 @@ wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection)
     g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
 
     if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
-        return g_object_ref(self->regular);
+        return self->regular == NULL ? NULL : g_object_ref(self->regular);
     else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
-        return g_object_ref(self->primary);
+        return self->primary == NULL ? NULL : g_object_ref(self->primary);
     else
         // Shouldn't happen
         return NULL;

@@ -7,13 +7,15 @@
 
 typedef enum
 {
-    CLIPPOR_SELECTION_TYPE_NONE,
-    CLIPPOR_SELECTION_TYPE_REGULAR,
-    CLIPPOR_SELECTION_TYPE_PRIMARY
+    CLIPPOR_SELECTION_TYPE_NONE = 0,
+    CLIPPOR_SELECTION_TYPE_REGULAR = 1 << 0,
+    CLIPPOR_SELECTION_TYPE_PRIMARY = 1 << 1
 } ClipporSelectionType;
 
 #define CLIPPOR_TYPE_SELECTION_TYPE (clippor_selection_type_get_type())
 GType clippor_selection_type_get_type(void);
+
+typedef uint ClipporSelectionTypeFlags;
 
 G_DECLARE_DERIVABLE_TYPE(
     ClipporSelection, clippor_selection, CLIPPOR, SELECTION, GObject

@@ -65,6 +65,7 @@ void wayland_connection_stop(WaylandConnection *self);
 
 int wayland_connection_get_fd(WaylandConnection *self);
 gboolean wayland_connection_is_active(WaylandConnection *self);
+const char *wayland_connection_get_display(WaylandConnection *self);
 WaylandSeat *
 wayland_connection_get_seat(WaylandConnection *self, const char *name);
 
@@ -86,8 +87,9 @@ gboolean wayland_data_offer_is_valid(WaylandDataOffer *self);
 
 // Creator functions
 
-WaylandDataDeviceManager *
-wayland_connection_get_data_device_manager(WaylandConnection *self);
+WaylandDataDeviceManager *wayland_connection_get_data_device_manager(
+    WaylandConnection *self, ClipporSelectionTypeFlags *sels
+);
 WaylandDataDevice *wayland_data_device_manager_get_data_device(
     WaylandDataDeviceManager *self, WaylandSeat *seat
 );

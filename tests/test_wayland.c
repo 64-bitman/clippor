@@ -153,7 +153,7 @@ test_wayland_connection_events(TEST_ARGS)
     g_assert_nonnull(seat);
 
     g_autoptr(WaylandDataDeviceManager) manager =
-        wayland_connection_get_data_device_manager(ct);
+        wayland_connection_get_data_device_manager(ct, NULL);
 
     g_assert_nonnull(manager);
 

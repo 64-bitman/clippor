@@ -1,23 +1,68 @@
 <!DOCTYPE node PUBLIC
 "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
 "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
-
 <node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
     <!-- com.github.clippor:
-        @short_description: Main interface for global operations
 
-        Used to create new clipboard, etc.
+        Main interface for global operations
     -->
-    <interface name='com.github.Clippor'>
+    <interface name="com.github.Clippor">
         <!--
-            @short_description: Create a new clipboard
+            AddClipboard:
+            @label: Label of new clipboard
 
-            Creates a new clipboard with given label. The clipboard will be
-            useless, selections will have to be connected to it. Note that
-            the new clipboard will be lost when the clippor process exits.
+            Creates a new clipboard with given label. Note that the new
+            clipboard will be lost when the clippor process exits.
         -->
         <method name="AddClipboard">
             <arg direction="in" type="s" name="label"/>
+        </method>
+        <!--
+            AddWaylandConnection:
+            @display: Wayland display to connect to
+
+            Creates a new Wayland connection for the given display. If the
+            clippor process doesn't have Wayland support compiled in, then
+            an error will be returned.
+        -->
+        <method name="AddWaylandConnection">
+            <arg direction="in" type="s" name="display"/>
+        </method>
+    </interface>
+
+    <!-- com.github.Clippor.WaylandConnections
+
+        Interface representing a single Wayland connection
+    -->
+    <interface name="com.github.Clippor.WaylandConnection">
+        <!--
+            Remove:
+
+            Removes the Wayland connection
+        -->
+        <method name="Remove"/>
+        <!--
+            Restart:
+
+            Restarts the Wayland connection, useful if connection went down but
+            now is up.
+        -->
+        <method name="Restart"/>
+    </interface>
+
+    <!-- com.github.Clippor.WaylandConnections
+
+        Interface representing a single Wayland selection for a seat
+    -->
+    <interface name="com.github.Clippor.WaylandConnections.SeatSelection">
+        <!--
+            Connect:
+            @clipboard: Clipboard to connect the selection to
+
+            Connects the selection to the given clipboard.
+        -->
+        <method name="Connect">
+            <arg direction="in" type="s" name="clipboard"/>
         </method>
     </interface>
 </node>

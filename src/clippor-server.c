@@ -32,6 +32,10 @@ struct _ClipporServer
 
         uint name_id;
         GDBusConnection *connection;
+
+        GDBusObjectManagerServer *wayland_cts_manager;
+        GDBusObjectManagerServer *wayland_seats_manager;
+
         GDBusObjectManagerServer *clipboards_manager;
     } dbus;
 };
@@ -64,8 +68,12 @@ clippor_server_class_init(ClipporServerClass *class)
     gobject_class->finalize = clippor_server_finalize;
 
     g_dbus_error_register_error(
-        SERVER_ERROR, SERVER_ERROR_CLIPBOARD_EXISTS,
-        "com.github.Clippor.Error.ClipboardExists"
+        SERVER_ERROR, SERVER_ERROR_OBJECT_EXISTS,
+        "com.github.Clippor.Error.ObjectExists"
+    );
+    g_dbus_error_register_error(
+        SERVER_ERROR, SERVER_ERROR_OBJECT_CREATE,
+        "com.github.Clippor.Error.ObjectCreate"
     );
 }
 
@@ -226,9 +234,17 @@ compare_clipboard_label(const void *a, const void *b)
 }
 
 static gboolean
-com_github_clippor_add_clipboard(
-    DBusClippor *interface, GDBusMethodInvocation *invocation,
-    const char *label, ClipporServer *server
+compare_wayland_display_label(const void *a, const void *b)
+{
+    return g_str_equal(
+        wayland_connection_get_display((WaylandConnection *)a), b
+    );
+}
+
+static gboolean
+handle_add_clipboard(
+    DBusClippor *object, GDBusMethodInvocation *invocation, const char *label,
+    ClipporServer *server
 )
 {
     // Check if clipboard with same name already exists
@@ -237,7 +253,7 @@ com_github_clippor_add_clipboard(
         ))
     {
         g_dbus_method_invocation_return_error(
-            invocation, SERVER_ERROR, SERVER_ERROR_CLIPBOARD_EXISTS,
+            invocation, SERVER_ERROR, SERVER_ERROR_OBJECT_EXISTS,
             "Clipboard '%s' already exists", label
         );
         return G_DBUS_METHOD_INVOCATION_HANDLED;
@@ -247,7 +263,56 @@ com_github_clippor_add_clipboard(
 
     g_ptr_array_add(server->cfg->clipboards, cb);
 
-    dbus_clippor_complete_add_clipboard(interface, invocation);
+    dbus_clippor_complete_add_clipboard(object, invocation);
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+static gboolean
+handle_add_wayland_connection(
+    DBusClippor *object, GDBusMethodInvocation *invocation, const char *display,
+    ClipporServer *server
+)
+{
+    // Check if we support Wayland
+    if (!WAYLAND_FUNCS.available)
+    {
+        g_dbus_method_invocation_return_error_literal(
+            invocation, SERVER_ERROR, SERVER_ERROR_UNAVAILABLE,
+            "Wayland not supported"
+        );
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+    // Check if Wayland connection of display already exists
+    if (g_ptr_array_find_with_equal_func(
+            server->cfg->wayland_connections, display,
+            compare_wayland_display_label, NULL
+        ))
+    {
+        g_dbus_method_invocation_return_error(
+            invocation, SERVER_ERROR, SERVER_ERROR_OBJECT_EXISTS,
+            "Wayland connection '%s' already exists", display
+        );
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+    g_autoptr(GError) error = NULL;
+    g_autoptr(WaylandConnection) ct = WAYLAND_FUNCS.connection_new(display);
+
+    if (!WAYLAND_FUNCS.connection_start(ct, &error))
+    {
+        g_dbus_method_invocation_return_error(
+            invocation, SERVER_ERROR, SERVER_ERROR_OBJECT_CREATE, "%s",
+            error->message
+        );
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+    WAYLAND_FUNCS.connection_install_source(ct, server->context);
+
+    g_ptr_array_add(server->cfg->wayland_connections, g_object_ref(ct));
+
+    dbus_clippor_complete_add_wayland_connection(object, invocation);
     return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
@@ -280,28 +345,29 @@ clippor_server_start_dbus(ClipporServer *self)
     {
         g_debug("Dbus service: success");
 
-        DBusClippor *interface;
-        GError *error = NULL;
+        DBusClippor *object;
+        g_autoptr(GError) error = NULL;
 
-        interface = dbus_clippor_skeleton_new();
+        object = dbus_clippor_skeleton_new();
 
         if (!g_dbus_interface_skeleton_export(
-                G_DBUS_INTERFACE_SKELETON(interface), self->dbus.connection,
+                G_DBUS_INTERFACE_SKELETON(object), self->dbus.connection,
                 "/com/github/Clippor", &error
             ))
-        {
             g_warning(
                 "Failed creating DBus object at '/com/github/Clippor': %s",
                 error->message
             );
-            g_error_free(error);
-        }
         else
         {
             // Connect method handlers
             g_signal_connect_object(
-                interface, "handle-add-clipboard",
-                G_CALLBACK(com_github_clippor_add_clipboard), self,
+                object, "handle-add-clipboard",
+                G_CALLBACK(handle_add_clipboard), self, G_CONNECT_DEFAULT
+            );
+            g_signal_connect_object(
+                object, "handle-add-wayland-connection",
+                G_CALLBACK(handle_add_wayland_connection), self,
                 G_CONNECT_DEFAULT
             );
         }
@@ -314,6 +380,8 @@ clippor_server_start_dbus(ClipporServer *self)
 static void
 clippor_server_stop_dbus(ClipporServer *self)
 {
+    g_assert(CLIPPOR_IS_SERVER(self));
+
     g_bus_unown_name(self->dbus.name_id);
 
     if (self->dbus.connection != NULL)

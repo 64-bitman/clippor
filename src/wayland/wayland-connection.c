@@ -280,6 +280,9 @@ static const struct wl_registry_listener wl_registry_listener = {
     .global_remove = wl_seat_listener_event_global_remove
 };
 
+/*
+ * Connect to the configured display for the Wayland connection.
+ */
 gboolean
 wayland_connection_start(WaylandConnection *self, GError **error)
 {
@@ -368,6 +371,14 @@ wayland_connection_is_active(WaylandConnection *self)
     return self->active;
 }
 
+const char *
+wayland_connection_get_display(WaylandConnection *self)
+{
+    g_assert(WAYLAND_IS_CONNECTION(self));
+
+    return self->display.name;
+}
+
 /*
  * Get Wayland seat with given name from connection. If "name" is NULL, then use
  * the first seat found. Returns NULL if no such seat exists. Returns a new
@@ -412,8 +423,7 @@ wayland_connection_flush(WaylandConnection *self, GError **error)
     if (!self->active)
     {
         g_set_error(
-            error, WAYLAND_ERROR,
-            WAYLAND_ERROR_NOT_CONNECTED,
+            error, WAYLAND_ERROR, WAYLAND_ERROR_NOT_CONNECTED,
             "Failed flushing Wayland display '%s': Not connected",
             self->display.name
         );
@@ -430,15 +440,13 @@ wayland_connection_flush(WaylandConnection *self, GError **error)
         {
             if (ret == -1)
                 g_set_error(
-                    error, WAYLAND_ERROR,
-                    WAYLAND_ERROR_FLUSH,
+                    error, WAYLAND_ERROR, WAYLAND_ERROR_FLUSH,
                     "Failed flushing Wayland display '%s': Poll failed",
                     self->display.name
                 );
             else
                 g_set_error(
-                    error, WAYLAND_ERROR,
-                    WAYLAND_ERROR_TIMEOUT,
+                    error, WAYLAND_ERROR, WAYLAND_ERROR_TIMEOUT,
                     "Failed flushing Wayland display '%s': Timed out",
                     self->display.name
                 );
@@ -462,8 +470,7 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
     if (!self->active)
     {
         g_set_error(
-            error, WAYLAND_ERROR,
-            WAYLAND_ERROR_NOT_CONNECTED,
+            error, WAYLAND_ERROR, WAYLAND_ERROR_NOT_CONNECTED,
             "Failed dispatching Wayland display '%s': Not connected",
             self->display.name
         );
@@ -475,8 +482,7 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
         if (wl_display_dispatch_pending(self->display.proxy) == -1)
         {
             g_set_error(
-                error, WAYLAND_ERROR,
-                WAYLAND_ERROR_DISPATCH,
+                error, WAYLAND_ERROR, WAYLAND_ERROR_DISPATCH,
                 "Failed dispatching Wayland display '%s': Failed dispatching "
                 "pending events",
                 self->display.name
@@ -497,15 +503,13 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
     {
         if (ret == -1)
             g_set_error(
-                error, WAYLAND_ERROR,
-                WAYLAND_ERROR_DISPATCH,
+                error, WAYLAND_ERROR, WAYLAND_ERROR_DISPATCH,
                 "Failed dispatching Wayland display '%s': Poll failed",
                 self->display.name
             );
         else
             g_set_error(
-                error, WAYLAND_ERROR,
-                WAYLAND_ERROR_TIMEOUT,
+                error, WAYLAND_ERROR, WAYLAND_ERROR_TIMEOUT,
                 "Failed dispatching Wayland display '%s': Timed out",
                 self->display.name
             );
@@ -567,8 +571,7 @@ wayland_connection_roundtrip(WaylandConnection *self, GError **error)
     if (!self->active)
     {
         g_set_error(
-            error, WAYLAND_ERROR,
-            WAYLAND_ERROR_NOT_CONNECTED,
+            error, WAYLAND_ERROR, WAYLAND_ERROR_NOT_CONNECTED,
             "Failed roundtripping Wayland display '%s': Not connected",
             self->display.name
         );
@@ -609,8 +612,7 @@ wayland_connection_roundtrip(WaylandConnection *self, GError **error)
         if (g_get_monotonic_time() - start >= self->connection_timeout)
         {
             g_set_error(
-                error, WAYLAND_ERROR,
-                WAYLAND_ERROR_TIMEOUT,
+                error, WAYLAND_ERROR, WAYLAND_ERROR_TIMEOUT,
                 "Failed roundtripping Wayland display '%s': Timed out",
                 self->display.name
             );
@@ -800,11 +802,14 @@ WAYLAND_DATA_PROXY_IS_VALID(source, WaylandDataSource)
 WAYLAND_DATA_PROXY_IS_VALID(offer, WaylandDataOffer)
 
 /*
- * Get a suitable data device manager from connection. Returns NULL if there are
- * none available
+ * Get a suitable data device manager from connection. What selections are
+ * supported are returned in "sels", which should be initialized to
+ * CLIPPOR_SELECTION_TYPE_NONE. Returns NULL if there are none available
  */
 WaylandDataDeviceManager *
-wayland_connection_get_data_device_manager(WaylandConnection *self)
+wayland_connection_get_data_device_manager(
+    WaylandConnection *self, ClipporSelectionTypeFlags *sels
+)
 {
     WaylandDataDeviceManager *manager = g_new(WaylandDataDeviceManager, 1);
 
@@ -814,17 +819,28 @@ wayland_connection_get_data_device_manager(WaylandConnection *self)
     {
         manager->proxy = self->gobjects.ext_data_control_manager_v1;
         manager->protocol = WAYLAND_DATA_PROTOCOL_EXT;
+
+        if (sels != NULL)
+            *sels |= CLIPPOR_SELECTION_TYPE_PRIMARY;
     }
     else if (self->gobjects.zwlr_data_control_manager_v1 != NULL)
     {
         manager->proxy = self->gobjects.zwlr_data_control_manager_v1;
         manager->protocol = WAYLAND_DATA_PROTOCOL_WLR;
+
+        // Only version 2 or greater supports the primary selection
+        if (sels != NULL &&
+            zwlr_data_control_manager_v1_get_version(manager->proxy) >= 2)
+            *sels |= CLIPPOR_SELECTION_TYPE_PRIMARY;
     }
     else
     {
         g_free(manager);
         return NULL;
     }
+
+    if (sels != NULL)
+        *sels |= CLIPPOR_SELECTION_TYPE_REGULAR;
 
     return manager;
 }
