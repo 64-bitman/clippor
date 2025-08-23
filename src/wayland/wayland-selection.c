@@ -6,8 +6,6 @@
 #include <glib-unix.h>
 #include <glib.h>
 
-G_DEFINE_QUARK(WAYLAND_SELECTION_ERROR, wayland_selection_error)
-
 struct _WaylandSelection
 {
     ClipporSelection parent_instance;
@@ -103,6 +101,7 @@ wayland_selection_make_inert(WaylandSelection *self)
     g_clear_pointer(&self->offer, wayland_data_offer_destroy);
     g_clear_pointer(&self->source, wayland_data_source_destroy);
     self->seat = NULL;
+    self->active = FALSE;
 }
 
 void
@@ -188,6 +187,10 @@ data_source_listener_event_send(
     );
 }
 
+/*
+ * Called when there is a new source client. Let them be the source until the
+ * selection is cleared or becomes empty, such as when the sourceclient exits.
+ */
 static void
 data_source_listener_event_cancelled(void *data, WaylandDataSource *source)
 {
@@ -347,8 +350,8 @@ clippor_selection_handler_get_data(
     if (!wsel->active)
     {
         g_set_error(
-            error, WAYLAND_SELECTION_ERROR, WAYLAND_SELECTION_ERROR_INERT,
-            "Selection is inert"
+            error, CLIPPOR_SELECTION_ERROR, CLIPPOR_SELECTION_ERROR_INERT,
+            "Failed creating input stream: Selection is inert"
         );
         return NULL;
     }
@@ -356,7 +359,7 @@ clippor_selection_handler_get_data(
     if (wsel->offer == NULL)
     {
         g_set_error(
-            error, WAYLAND_SELECTION_ERROR, WAYLAND_SELECTION_ERROR_CLEARED,
+            error, CLIPPOR_SELECTION_ERROR, CLIPPOR_SELECTION_ERROR_CLEARED,
             "Selection is cleared"
         );
         return NULL;
@@ -391,7 +394,7 @@ clippor_selection_handler_get_data(
     return stream;
 }
 
-// TODO: refactor  error enums into more general topics.
+// TODO: refactor error enums into more general topics.
 
 /*
  * If an error occurs, then the selection will use the passed entry instead of
@@ -412,7 +415,7 @@ clippor_selection_handler_update(
     if (!wsel->active)
     {
         g_set_error(
-            error, WAYLAND_SELECTION_ERROR, WAYLAND_SELECTION_ERROR_INERT,
+            error, CLIPPOR_SELECTION_ERROR, CLIPPOR_SELECTION_ERROR_INERT,
             "Failed setting selection: Selection is inert"
         );
         return FALSE;
@@ -436,7 +439,7 @@ clippor_selection_handler_is_owned(ClipporSelection *self)
 
     WaylandSelection *wsel = WAYLAND_SELECTION(self);
 
-    return wsel->source != NULL;
+    return wsel->source != NULL && wsel->active;
 }
 
 static gboolean

@@ -10,7 +10,8 @@ G_DECLARE_FINAL_TYPE(ClipporServer, clippor_server, CLIPPOR, SERVER, GObject)
 
 typedef enum
 {
-    SERVER_ERROR_FAILED
+    SERVER_ERROR_FAILED,
+    SERVER_ERROR_CLIPBOARD_EXISTS
 } ServerError;
 
 #define SERVER_ERROR (server_error_quark())

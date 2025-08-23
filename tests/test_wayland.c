@@ -333,6 +333,58 @@ test_wayland_selection_set(TEST_ARGS)
     main_context_stop();
 
     g_assert_true(clippor_selection_is_owned(sel));
+
+    wl_copy(wc, FALSE, "test", NULL);
+
+    main_context_dispatch(fixture->context);
+
+    g_assert_false(clippor_selection_is_owned(sel));
+}
+
+/*
+ * Test behaviour when Wayland selection object becomes inert.
+ */
+static void
+test_wayland_selection_inert(TEST_ARGS)
+{
+    WaylandCompositor *wc = fixture->wc;
+    g_autoptr(WaylandConnection) ct = wayland_connection_new(wc->display);
+    g_autoptr(GError) error = NULL;
+
+    wayland_connection_start(ct, &error);
+    g_assert_no_error(error);
+    wayland_connection_install_source(ct, fixture->context);
+
+    g_assert_true(wayland_connection_is_active(ct));
+
+    g_autoptr(WaylandSeat) seat = wayland_connection_get_seat(ct, NULL);
+    g_assert_nonnull(seat);
+
+    g_autoptr(WaylandSelection) wsel =
+        wayland_seat_get_selection(seat, CLIPPOR_SELECTION_TYPE_REGULAR);
+    ClipporSelection *sel = CLIPPOR_SELECTION(wsel);
+
+    main_context_dispatch(fixture->context);
+    g_assert_false(clippor_selection_is_inert(sel));
+
+    g_clear_pointer(&fixture->wc, wayland_compositor_destroy);
+    main_context_dispatch(fixture->context);
+    g_assert_true(clippor_selection_is_inert(sel));
+
+    // Check if methods fail
+    clippor_selection_update(sel, NULL, FALSE, &error);
+    g_assert_error(
+        error, CLIPPOR_SELECTION_ERROR, CLIPPOR_SELECTION_ERROR_INERT
+    );
+    g_clear_error(&error);
+
+    clippor_selection_get_data(sel, "text/plain", &error);
+    g_assert_error(
+        error, CLIPPOR_SELECTION_ERROR, CLIPPOR_SELECTION_ERROR_INERT
+    );
+
+    g_assert_null(clippor_selection_get_mime_types(sel));
+    g_assert_false(clippor_selection_is_owned(sel));
 }
 
 int
@@ -348,6 +400,7 @@ main(int argc, char *argv[])
     TEST("/wayland/connection/lost", test_wayland_connection_lost);
     TEST("/wayland/selection/update", test_wayland_selection_update);
     TEST("/wayland/selection/set", test_wayland_selection_set);
+    TEST("/wayland/selection/inert", test_wayland_selection_inert);
 
     return g_test_run();
 }

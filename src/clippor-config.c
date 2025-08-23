@@ -174,7 +174,7 @@ skip_clipboards:;
             if (primary.type != TOML_UNKNOWN && primary.type != TOML_TABLE)
                 TOML_ERROR("Table 'primary' in 'seat' is not a table");
 
-            WaylandSeat *seat_obj =
+            g_autoptr(WaylandSeat) seat_obj =
                 WAYLAND_FUNCS.connection_get_seat(ct, name.u.str.ptr);
 
             if (regular.type != TOML_UNKNOWN)
@@ -204,6 +204,7 @@ skip_clipboards:;
                         break;
                     }
                 }
+                g_object_unref(sel);
             }
 
             if (primary.type != TOML_UNKNOWN)
@@ -233,6 +234,8 @@ skip_clipboards:;
                         break;
                     }
                 }
+
+                g_object_unref(sel);
             }
         }
     }

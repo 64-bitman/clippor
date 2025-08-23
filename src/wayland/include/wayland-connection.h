@@ -12,16 +12,18 @@ G_DECLARE_FINAL_TYPE(
 
 typedef enum
 {
-    WAYLAND_CONNECTION_ERROR_CONNECT,
-    WAYLAND_CONNECTION_ERROR_FLUSH,
-    WAYLAND_CONNECTION_ERROR_DISPATCH,
-    WAYLAND_CONNECTION_ERROR_ROUNDTRIP,
-    WAYLAND_CONNECTION_ERROR_TIMEOUT,
-    WAYLAND_CONNECTION_ERROR_NOT_CONNECTED
-} WaylandConnectionError;
+    WAYLAND_ERROR_CONNECT,
+    WAYLAND_ERROR_FLUSH,
+    WAYLAND_ERROR_DISPATCH,
+    WAYLAND_ERROR_ROUNDTRIP,
+    WAYLAND_ERROR_TIMEOUT,
+    WAYLAND_ERROR_NOT_CONNECTED,
+    WAYLAND_ERROR_CREATE_SEAT,
+    WAYLAND_ERROR_NO_DATA_PROTOCOL
+} WaylandError;
 
-#define WAYLAND_CONNECTION_ERROR (wayland_connection_error_quark())
-GQuark wayland_connection_error_quark(void);
+#define WAYLAND_ERROR (wayland_error_quark())
+GQuark wayland_error_quark(void);
 
 typedef struct WaylandDataDeviceManager WaylandDataDeviceManager;
 typedef struct WaylandDataDevice WaylandDataDevice;

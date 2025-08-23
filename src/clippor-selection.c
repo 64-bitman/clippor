@@ -10,6 +10,8 @@ G_DEFINE_ENUM_TYPE(
     G_DEFINE_ENUM_VALUE(CLIPPOR_SELECTION_TYPE_PRIMARY, "primary")
 )
 
+G_DEFINE_QUARK(CLIPPOR_SELECTION_ERROR, clippor_selection_error)
+
 typedef struct
 {
     ClipporSelectionType type;

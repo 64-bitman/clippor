@@ -15,5 +15,5 @@ void dummy_selection_uninstall_source(DummySelection *self);
 
 void dummy_selection_copy(
     DummySelection *self, const char *contents, const char *first_mime_type, ...
-) G_GNUC_NULL_TERMINATED;
+);
 const char *dummy_selection_paste(DummySelection *self, const char *mime_type);

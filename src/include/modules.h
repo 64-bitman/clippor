@@ -9,7 +9,7 @@ typedef struct
 
     WaylandConnection *(*connection_new)(const char *);
     gboolean (*connection_start)(WaylandConnection *, GError **);
-    gboolean (*connection_stop)(WaylandConnection *);
+    void (*connection_stop)(WaylandConnection *);
     void (*connection_install_source)(WaylandConnection *, GMainContext *);
     WaylandSeat *(*connection_get_seat)(WaylandConnection *, const char *);
 

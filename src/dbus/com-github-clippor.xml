@@ -1,0 +1,23 @@
+<!DOCTYPE node PUBLIC
+"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+    <!-- com.github.clippor:
+        @short_description: Main interface for global operations
+
+        Used to create new clipboard, etc.
+    -->
+    <interface name='com.github.Clippor'>
+        <!--
+            @short_description: Create a new clipboard
+
+            Creates a new clipboard with given label. The clipboard will be
+            useless, selections will have to be connected to it. Note that
+            the new clipboard will be lost when the clippor process exits.
+        -->
+        <method name="AddClipboard">
+            <arg direction="in" type="s" name="label"/>
+        </method>
+    </interface>
+</node>

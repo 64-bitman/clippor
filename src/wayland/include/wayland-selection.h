@@ -10,15 +10,6 @@ G_DECLARE_FINAL_TYPE(
 )
 #define WAYLAND_TYPE_SELECTION (wayland_selection_get_type())
 
-typedef enum
-{
-    WAYLAND_SELECTION_ERROR_CLEARED,
-    WAYLAND_SELECTION_ERROR_INERT
-} WaylandSelectionError;
-
-#define WAYLAND_SELECTION_ERROR (wayland_selection_error_quark())
-GQuark wayland_selection_error_quark(void);
-
 typedef struct _WaylandSeat WaylandSeat;
 
 WaylandSelection *

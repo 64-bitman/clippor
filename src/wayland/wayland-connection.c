@@ -4,7 +4,7 @@
 #include "wlr-data-control-unstable-v1.h"
 #include <wayland-client.h>
 
-G_DEFINE_QUARK(WAYLAND_CONNECTION_ERROR, wayland_connection_error)
+G_DEFINE_QUARK(WAYLAND_ERROR, wayland_error)
 
 // TODO: Use wl_fixes interface to destroy registry
 
@@ -295,7 +295,7 @@ wayland_connection_start(WaylandConnection *self, GError **error)
     if (self->display.proxy == NULL)
     {
         g_set_error(
-            error, WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_CONNECT,
+            error, WAYLAND_ERROR, WAYLAND_ERROR_CONNECT,
             "Failed connecting to display '%s': Does not exist",
             self->display.name
         );
@@ -378,6 +378,9 @@ wayland_connection_get_seat(WaylandConnection *self, const char *name)
 {
     g_assert(WAYLAND_IS_CONNECTION(self));
 
+    if (!self->active)
+        return NULL;
+
     WaylandSeat *seat;
 
     if (name == NULL)
@@ -409,8 +412,8 @@ wayland_connection_flush(WaylandConnection *self, GError **error)
     if (!self->active)
     {
         g_set_error(
-            error, WAYLAND_CONNECTION_ERROR,
-            WAYLAND_CONNECTION_ERROR_NOT_CONNECTED,
+            error, WAYLAND_ERROR,
+            WAYLAND_ERROR_NOT_CONNECTED,
             "Failed flushing Wayland display '%s': Not connected",
             self->display.name
         );
@@ -427,15 +430,15 @@ wayland_connection_flush(WaylandConnection *self, GError **error)
         {
             if (ret == -1)
                 g_set_error(
-                    error, WAYLAND_CONNECTION_ERROR,
-                    WAYLAND_CONNECTION_ERROR_FLUSH,
+                    error, WAYLAND_ERROR,
+                    WAYLAND_ERROR_FLUSH,
                     "Failed flushing Wayland display '%s': Poll failed",
                     self->display.name
                 );
             else
                 g_set_error(
-                    error, WAYLAND_CONNECTION_ERROR,
-                    WAYLAND_CONNECTION_ERROR_TIMEOUT,
+                    error, WAYLAND_ERROR,
+                    WAYLAND_ERROR_TIMEOUT,
                     "Failed flushing Wayland display '%s': Timed out",
                     self->display.name
                 );
@@ -459,8 +462,8 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
     if (!self->active)
     {
         g_set_error(
-            error, WAYLAND_CONNECTION_ERROR,
-            WAYLAND_CONNECTION_ERROR_NOT_CONNECTED,
+            error, WAYLAND_ERROR,
+            WAYLAND_ERROR_NOT_CONNECTED,
             "Failed dispatching Wayland display '%s': Not connected",
             self->display.name
         );
@@ -472,8 +475,8 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
         if (wl_display_dispatch_pending(self->display.proxy) == -1)
         {
             g_set_error(
-                error, WAYLAND_CONNECTION_ERROR,
-                WAYLAND_CONNECTION_ERROR_DISPATCH,
+                error, WAYLAND_ERROR,
+                WAYLAND_ERROR_DISPATCH,
                 "Failed dispatching Wayland display '%s': Failed dispatching "
                 "pending events",
                 self->display.name
@@ -494,15 +497,15 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
     {
         if (ret == -1)
             g_set_error(
-                error, WAYLAND_CONNECTION_ERROR,
-                WAYLAND_CONNECTION_ERROR_DISPATCH,
+                error, WAYLAND_ERROR,
+                WAYLAND_ERROR_DISPATCH,
                 "Failed dispatching Wayland display '%s': Poll failed",
                 self->display.name
             );
         else
             g_set_error(
-                error, WAYLAND_CONNECTION_ERROR,
-                WAYLAND_CONNECTION_ERROR_TIMEOUT,
+                error, WAYLAND_ERROR,
+                WAYLAND_ERROR_TIMEOUT,
                 "Failed dispatching Wayland display '%s': Timed out",
                 self->display.name
             );
@@ -514,7 +517,7 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
     if (wl_display_read_events(self->display.proxy) == -1)
     {
         g_set_error(
-            error, WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_DISPATCH,
+            error, WAYLAND_ERROR, WAYLAND_ERROR_DISPATCH,
             "Failed dispatching Wayland display '%s': Failed reading events",
             self->display.name
         );
@@ -528,7 +531,7 @@ wayland_connection_dispatch(WaylandConnection *self, GError **error)
     if ((num = wl_display_dispatch_pending(self->display.proxy)) == -1)
     {
         g_set_error(
-            error, WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_DISPATCH,
+            error, WAYLAND_ERROR, WAYLAND_ERROR_DISPATCH,
             "Failed dispatching Wayland display '%s': Failed dispatching "
             "pending events",
             self->display.name
@@ -564,8 +567,8 @@ wayland_connection_roundtrip(WaylandConnection *self, GError **error)
     if (!self->active)
     {
         g_set_error(
-            error, WAYLAND_CONNECTION_ERROR,
-            WAYLAND_CONNECTION_ERROR_NOT_CONNECTED,
+            error, WAYLAND_ERROR,
+            WAYLAND_ERROR_NOT_CONNECTED,
             "Failed roundtripping Wayland display '%s': Not connected",
             self->display.name
         );
@@ -577,7 +580,7 @@ wayland_connection_roundtrip(WaylandConnection *self, GError **error)
     if (callback == NULL)
     {
         g_set_error(
-            error, WAYLAND_CONNECTION_ERROR, WAYLAND_CONNECTION_ERROR_ROUNDTRIP,
+            error, WAYLAND_ERROR, WAYLAND_ERROR_ROUNDTRIP,
             "Failed roundtripping Wayland display '%s': Failed creating "
             "callback",
             self->display.name
@@ -606,8 +609,8 @@ wayland_connection_roundtrip(WaylandConnection *self, GError **error)
         if (g_get_monotonic_time() - start >= self->connection_timeout)
         {
             g_set_error(
-                error, WAYLAND_CONNECTION_ERROR,
-                WAYLAND_CONNECTION_ERROR_TIMEOUT,
+                error, WAYLAND_ERROR,
+                WAYLAND_ERROR_TIMEOUT,
                 "Failed roundtripping Wayland display '%s': Timed out",
                 self->display.name
             );

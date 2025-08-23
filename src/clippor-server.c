@@ -2,6 +2,7 @@
 #include "clippor-clipboard.h"
 #include "clippor-config.h"
 #include "clippor-database.h"
+#include "com.github.Clippor.h"
 #include "modules.h"
 #include "wayland-connection.h"
 #include <glib-object.h>
@@ -20,7 +21,19 @@ struct _ClipporServer
 
     uint signals[2]; // Source ids for each signal
     GMainContext *context;
-    GMainLoop *loop; // Optional
+    GMainLoop *loop;
+
+    // DBus service for server
+    struct
+    {
+        gboolean available;
+        gboolean got_name;
+        gboolean got_bus;
+
+        uint name_id;
+        GDBusConnection *connection;
+        GDBusObjectManagerServer *clipboards_manager;
+    } dbus;
 };
 
 G_DEFINE_TYPE(ClipporServer, clippor_server, G_TYPE_OBJECT)
@@ -49,6 +62,11 @@ clippor_server_class_init(ClipporServerClass *class)
 
     gobject_class->dispose = clippor_server_dispose;
     gobject_class->finalize = clippor_server_finalize;
+
+    g_dbus_error_register_error(
+        SERVER_ERROR, SERVER_ERROR_CLIPBOARD_EXISTS,
+        "com.github.Clippor.Error.ClipboardExists"
+    );
 }
 
 static void
@@ -116,6 +134,9 @@ clippor_server_handle_signal(ClipporServer *self)
     return G_SOURCE_REMOVE;
 }
 
+static void clippor_server_start_dbus(ClipporServer *self);
+static void clippor_server_stop_dbus(ClipporServer *self);
+
 /*
  * Start server using thread default main context and run a main loop until
  * signaled to quit.
@@ -144,8 +165,159 @@ clippor_server_start(ClipporServer *self, GError **error)
 
     g_debug("Starting server");
 
+    clippor_server_start_dbus(self);
+
     g_main_loop_run(self->loop);
     g_main_loop_unref(self->loop);
+    clippor_server_stop_dbus(self);
 
     return TRUE;
+}
+
+static void
+on_bus_acquired(
+    GDBusConnection *connection, const gchar *name G_GNUC_UNUSED,
+    gpointer user_data
+)
+{
+    ClipporServer *server = user_data;
+
+    g_debug("DBus service: acquired the session bus connectionn");
+    server->dbus.got_bus = TRUE;
+
+    server->dbus.connection = g_object_ref(connection);
+}
+
+static void
+on_name_acquired(
+    GDBusConnection *connection G_GNUC_UNUSED, const gchar *name,
+    gpointer user_data
+)
+{
+    ClipporServer *server = user_data;
+
+    g_debug("DBus service: acquired the name '%s'", name);
+    server->dbus.got_name = TRUE;
+
+    if (server->dbus.got_bus)
+        g_main_loop_quit(server->loop);
+}
+
+static void
+on_name_lost(
+    GDBusConnection *connection G_GNUC_UNUSED, const gchar *name,
+    gpointer user_data
+)
+{
+    ClipporServer *server = user_data;
+
+    g_debug("DBus service: lost the name '%s'", name);
+
+    server->dbus.available = FALSE;
+
+    if (server->dbus.got_bus || connection == NULL)
+        g_main_loop_quit(server->loop);
+}
+
+static gboolean
+compare_clipboard_label(const void *a, const void *b)
+{
+    return g_str_equal(clippor_clipboard_get_label((ClipporClipboard *)a), b);
+}
+
+static gboolean
+com_github_clippor_add_clipboard(
+    DBusClippor *interface, GDBusMethodInvocation *invocation,
+    const char *label, ClipporServer *server
+)
+{
+    // Check if clipboard with same name already exists
+    if (g_ptr_array_find_with_equal_func(
+            server->cfg->clipboards, label, compare_clipboard_label, NULL
+        ))
+    {
+        g_dbus_method_invocation_return_error(
+            invocation, SERVER_ERROR, SERVER_ERROR_CLIPBOARD_EXISTS,
+            "Clipboard '%s' already exists", label
+        );
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+    ClipporClipboard *cb = clippor_clipboard_new(label);
+
+    g_ptr_array_add(server->cfg->clipboards, cb);
+
+    dbus_clippor_complete_add_clipboard(interface, invocation);
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
+/*
+ * Own the DBus name and start the service. Returns FALSE on error.
+ */
+static void
+clippor_server_start_dbus(ClipporServer *self)
+{
+    g_assert(CLIPPOR_IS_SERVER(self));
+
+    self->dbus.name_id = g_bus_own_name(
+        G_BUS_TYPE_SESSION, "com.github.Clippor",
+        G_BUS_NAME_OWNER_FLAGS_DO_NOT_QUEUE, on_bus_acquired, on_name_acquired,
+        on_name_lost, self, NULL
+    );
+
+    self->dbus.available = TRUE; // Will be set to FALSE if needed
+
+    // Run main loop until we acquire bus (or not)
+    g_main_loop_run(self->loop);
+
+    if (!self->dbus.available && !self->dbus.got_bus && !self->dbus.got_name)
+        // Connection to bus cannot be made
+        g_debug("DBus service: failed creating connection to session bus");
+    else if (!self->dbus.available && self->dbus.got_bus)
+        // Name cannot be obtained
+        g_debug("DBus service: cannot obtain name 'com.github.Clippor'");
+    else
+    {
+        g_debug("Dbus service: success");
+
+        DBusClippor *interface;
+        GError *error = NULL;
+
+        interface = dbus_clippor_skeleton_new();
+
+        if (!g_dbus_interface_skeleton_export(
+                G_DBUS_INTERFACE_SKELETON(interface), self->dbus.connection,
+                "/com/github/Clippor", &error
+            ))
+        {
+            g_warning(
+                "Failed creating DBus object at '/com/github/Clippor': %s",
+                error->message
+            );
+            g_error_free(error);
+        }
+        else
+        {
+            // Connect method handlers
+            g_signal_connect_object(
+                interface, "handle-add-clipboard",
+                G_CALLBACK(com_github_clippor_add_clipboard), self,
+                G_CONNECT_DEFAULT
+            );
+        }
+
+        return;
+    }
+    self->dbus.available = FALSE;
+}
+
+static void
+clippor_server_stop_dbus(ClipporServer *self)
+{
+    g_bus_unown_name(self->dbus.name_id);
+
+    if (self->dbus.connection != NULL)
+        g_object_unref(self->dbus.connection);
+    if (self->dbus.clipboards_manager != NULL)
+        g_object_unref(self->dbus.clipboards_manager);
 }

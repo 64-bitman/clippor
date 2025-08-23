@@ -1,4 +1,5 @@
 #include "modules.h"
+#include "config.h"
 #include <glib-unix.h>
 #include <glib.h>
 #include <gmodule.h>
@@ -7,6 +8,7 @@ static GModule *MODULE_WAYLAND;
 
 WaylandModule WAYLAND_FUNCS;
 
+#ifndef WAYLAND_LINKED
 static void
 modules_try_wayland(const char *dir)
 {
@@ -51,6 +53,7 @@ fail:
     g_clear_pointer(&MODULE_WAYLAND, g_module_close);
     g_debug("Failed reading symbols from Wayland module: %s", g_module_error());
 }
+#endif // WAYLAND_LINKED
 
 /*
  * Find available modules and open them. Should only be called once during
@@ -71,8 +74,23 @@ modules_init(void)
         if (path == NULL)
             continue;
 
+#ifndef WAYLAND_LINKED
         modules_try_wayland(path);
+#endif
     }
+
+#ifdef WAYLAND_LINKED
+    WAYLAND_FUNCS.connection_new = wayland_connection_new;
+    WAYLAND_FUNCS.connection_start = wayland_connection_start;
+    WAYLAND_FUNCS.connection_stop = wayland_connection_stop;
+    WAYLAND_FUNCS.connection_install_source = wayland_connection_install_source;
+    WAYLAND_FUNCS.connection_get_seat = wayland_connection_get_seat;
+    WAYLAND_FUNCS.seat_get_selection = wayland_seat_get_selection;
+    WAYLAND_FUNCS.available = TRUE;
+#endif
+
+    if (!WAYLAND_FUNCS.available)
+        g_debug("Wayland module not found");
 }
 
 void

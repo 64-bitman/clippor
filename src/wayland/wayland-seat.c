@@ -6,8 +6,6 @@
 #include <glib.h>
 #include <wayland-client.h>
 
-G_DEFINE_QUARK(WAYLAND_SEAT_ERROR, wayland_seat_error)
-
 struct _WaylandSeat
 {
     GObject parent_instance;
@@ -194,7 +192,7 @@ wayland_seat_new(
     {
         // No data protocol available
         g_set_error(
-            error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_NO_DATA_PROTOCOL,
+            error, WAYLAND_ERROR, WAYLAND_ERROR_NO_DATA_PROTOCOL,
             "No data protocol available"
         );
         goto fail;
@@ -213,7 +211,7 @@ wayland_seat_new(
     if (seat->name == NULL)
     {
         g_set_error_literal(
-            error, WAYLAND_SEAT_ERROR, WAYLAND_SEAT_ERROR_CREATE,
+            error, WAYLAND_ERROR, WAYLAND_ERROR_CREATE_SEAT,
             "Seat name is NULL"
         );
         goto fail;
@@ -262,7 +260,8 @@ data_device_listener_event_selection(
 )
 {
     WaylandSeat *seat = data;
-    WaylandSelection *wsel = wayland_seat_get_selection(seat, selection);
+    g_autoptr(WaylandSelection) wsel =
+        wayland_seat_get_selection(seat, selection);
 
     wayland_selection_new_offer(wsel, offer);
 }
@@ -350,6 +349,9 @@ wayland_seat_get_connection(WaylandSeat *self)
     return self->ct;
 }
 
+/*
+ * Returns a new reference
+ */
 WaylandSelection *
 wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection)
 {
@@ -357,9 +359,9 @@ wayland_seat_get_selection(WaylandSeat *self, ClipporSelectionType selection)
     g_assert(selection != CLIPPOR_SELECTION_TYPE_NONE);
 
     if (selection == CLIPPOR_SELECTION_TYPE_REGULAR)
-        return self->regular;
+        return g_object_ref(self->regular);
     else if (selection == CLIPPOR_SELECTION_TYPE_PRIMARY)
-        return self->primary;
+        return g_object_ref(self->primary);
     else
         // Shouldn't happen
         return NULL;

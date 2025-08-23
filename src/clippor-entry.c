@@ -89,9 +89,9 @@ clippor_entry_new_full(
 ClipporEntry *
 clippor_entry_new(ClipporClipboard *cb)
 {
-    g_assert(CLIPPOR_IS_CLIPBOARD(cb));
+    g_assert(cb == NULL || CLIPPOR_IS_CLIPBOARD(cb));
 
-    const char *label = clippor_clipboard_get_label(cb);
+    const char *label = cb != NULL ? clippor_clipboard_get_label(cb) : "";
     int64_t creation_time = g_get_real_time();
 
     // Id is a checksum of creation_time and clipboard label
@@ -105,8 +105,14 @@ clippor_entry_new(ClipporClipboard *cb)
     const char *id = g_checksum_get_string(checksum);
 
     return clippor_entry_new_full(
-        clippor_clipboard_get_label(cb), id, creation_time, creation_time, FALSE
+        label, id, creation_time, creation_time, FALSE
     );
+}
+
+static gboolean
+compare_mime_type_data(void *key G_GNUC_UNUSED, void *value, void *user_data)
+{
+    return g_bytes_compare(value, user_data) == 0;
 }
 
 void
@@ -118,8 +124,16 @@ clippor_entry_add_mime_type(
     g_assert(mime_type != NULL);
     g_assert(data != NULL);
 
+    // Check if mime type with same data already exists, if so then use that
+    // instead.
+    GBytes *bytes =
+        g_hash_table_find(self->mime_types, compare_mime_type_data, data);
+
+    if (bytes == NULL)
+        bytes = data;
+
     g_hash_table_insert(
-        self->mime_types, g_strdup(mime_type), g_bytes_ref(data)
+        self->mime_types, g_strdup(mime_type), g_bytes_ref(bytes)
     );
 }
 

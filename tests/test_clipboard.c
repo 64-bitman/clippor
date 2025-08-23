@@ -72,14 +72,6 @@ test_clipboard_update(TEST_ARGS)
     g_assert_true(clippor_selection_is_owned(CLIPPOR_SELECTION(psel)));
 }
 
-/*
- * Test if clipboard sets selection after it is cleared.
- */
-static void
-test_clipboard_persists(TEST_ARGS)
-{
-}
-
 int
 main(int argc, char *argv[])
 {
@@ -90,7 +82,6 @@ main(int argc, char *argv[])
     test_setup();
 
     TEST("/clipboard/update", test_clipboard_update);
-    TEST("/clipboard/persists", test_clipboard_persists);
 
     return g_test_run();
 }

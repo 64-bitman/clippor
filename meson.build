@@ -22,11 +22,11 @@ add_project_arguments(
   language: 'c'
   )
 
-glib_dep = dependency('glib-2.0')
-gio_dep = dependency('gio-2.0')
-gio_unix_dep = dependency('gio-unix-2.0')
-gmodule_dep = dependency('gmodule-2.0')
-sqlite_dep = dependency('sqlite3')
+glib_dep = dependency('glib-2.0', version: '>=2.74')
+gio_dep = dependency('gio-2.0', version: '>=2.74')
+gio_unix_dep = dependency('gio-unix-2.0', version: '>=2.74')
+gmodule_dep = dependency('gmodule-2.0', version: '>=2.74')
+sqlite_dep = dependency('sqlite3', version: '>=3.35.0')
 
 deps = [
   glib_dep,
@@ -40,7 +40,18 @@ sources = []
 includes = []
 link_with = []
 
+conf_data = configuration_data()
+
+conf_data.set('WAYLAND_LINKED', get_option('link_wayland_module'))
+
+configure_file(output: 'config.h', configuration: conf_data)
+
 subdir('src')
+
+if get_option('link_wayland_module')
+    link_with += wayland_library
+    includes += include_directories('.')
+endif
 
 clippor = executable(
   'clippor',
@@ -51,3 +62,5 @@ clippor = executable(
   link_with: link_with,
   export_dynamic: true
   )
+
+subdir('tests')

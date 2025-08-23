@@ -15,7 +15,8 @@ wayland_module = shared_module(
     include_directories: wl_includes,
     dependencies: [wl_dep, glib_dep, gio_unix_dep],
     link_with: wl_link_with,
-    install: false
+    install: false,
+    override_options: ['strip=false', 'debug=true']
     )
 
 # Used by tests

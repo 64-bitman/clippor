@@ -266,6 +266,7 @@ clippor_database_ref_data(ClipporDatabase *self, GBytes *bytes, GError **error)
     g_assert(bytes != NULL);
     g_assert(error == NULL || *error == NULL);
 
+    // Add new row, or if one already exists, increment the reference count
     const char *statement =
         "INSERT INTO Data (Data_id) "
         "VALUES (?) ON CONFLICT DO UPDATE SET Ref_count = Ref_count + 1;;";
@@ -296,7 +297,9 @@ clippor_database_ref_data(ClipporDatabase *self, GBytes *bytes, GError **error)
         g_autofree char *path =
             g_strdup_printf("%s/data/%s", self->location_dir, data_id);
 
-        if (!g_file_set_contents_full(
+        // If file already exists, ignore
+        if (!g_file_test(path, G_FILE_TEST_EXISTS) &&
+            !g_file_set_contents_full(
                 path, stuff, sz, G_FILE_SET_CONTENTS_CONSISTENT, 0644, error
             ))
         {

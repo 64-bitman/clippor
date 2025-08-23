@@ -215,8 +215,7 @@ dummy_selection_copy(
 )
 {
     g_assert(DUMMY_IS_SELECTION(self));
-    g_assert(contents != NULL);
-    g_assert(first_mime_type != NULL);
+    g_assert(first_mime_type == NULL || contents != NULL);
 
     if (first_mime_type == NULL)
     {

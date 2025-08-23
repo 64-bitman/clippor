@@ -1,0 +1,5 @@
+option('link_wayland_module',
+    type: 'boolean',
+    value : false,
+    description : 'Link Wayland module directly'
+    )

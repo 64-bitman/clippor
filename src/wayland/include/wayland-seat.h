@@ -8,15 +8,6 @@
 G_DECLARE_FINAL_TYPE(WaylandSeat, wayland_seat, WAYLAND, SEAT, GObject)
 #define WAYLAND_TYPE_SEAT (wayland_seat_get_type())
 
-typedef enum
-{
-    WAYLAND_SEAT_ERROR_CREATE,
-    WAYLAND_SEAT_ERROR_NO_DATA_PROTOCOL
-} WaylandSeatError;
-
-#define WAYLAND_SEAT_ERROR (wayland_seat_error_quark())
-GQuark wayland_seat_error_quark(void);
-
 typedef struct _WaylandConnection WaylandConnection;
 typedef struct _WaylandSelection WaylandSelection;
 typedef struct WaylandDataDeviceManager WaylandDataDeviceManager;

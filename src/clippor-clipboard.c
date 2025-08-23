@@ -282,9 +282,7 @@ selection_data_async_callback(
     {
         // An error occured or operation was cancelled
         if (error->code != G_IO_ERROR_CANCELLED)
-            g_debug(
-                "Input stream did not finish properly: %s", error->message
-            );
+            g_debug("Input stream did not finish properly: %s", error->message);
         goto fail;
     }
     else if (r == 0)

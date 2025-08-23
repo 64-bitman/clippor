@@ -20,6 +20,15 @@ G_DECLARE_DERIVABLE_TYPE(
 )
 #define CLIPPOR_TYPE_SELECTION (clippor_selection_get_type())
 
+typedef enum
+{
+    CLIPPOR_SELECTION_ERROR_CLEARED,
+    CLIPPOR_SELECTION_ERROR_INERT
+} ClipporSelectionError;
+
+#define CLIPPOR_SELECTION_ERROR (clippor_selection_error_quark())
+GQuark clippor_selection_error_quark(void);
+
 struct _ClipporSelectionClass
 {
     GObjectClass parent_class;
