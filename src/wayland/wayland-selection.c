@@ -41,7 +41,7 @@ wayland_selection_finalize(GObject *object)
 // Class method handlers
 static GPtrArray *
 clippor_selection_handler_get_mime_types(ClipporSelection *self);
-static GInputStream *clippor_selection_handler_get_data(
+static GInputStream *clippor_selection_handler_get_data_stream(
     ClipporSelection *self, const char *mime_type, GError **error
 );
 static gboolean clippor_selection_handler_update(
@@ -61,7 +61,7 @@ wayland_selection_class_init(WaylandSelectionClass *class)
     gobject_class->finalize = wayland_selection_finalize;
 
     sel_class->get_mime_types = clippor_selection_handler_get_mime_types;
-    sel_class->get_data = clippor_selection_handler_get_data;
+    sel_class->get_data_stream = clippor_selection_handler_get_data_stream;
     sel_class->update = clippor_selection_handler_update;
     sel_class->is_owned = clippor_selection_handler_is_owned;
     sel_class->is_inert = clippor_selection_handler_is_inert;
@@ -196,8 +196,8 @@ data_source_listener_event_cancelled(void *data, WaylandDataSource *source)
 {
     WaylandSelection *wsel = data;
 
-    g_assert(source == wsel->source);
-
+    // "source" may be different from "wsel->source", such as when we replace
+    // the existing data source with a new data source.
     wayland_data_source_destroy(source);
     wsel->source = NULL;
     wsel->is_source = FALSE;
@@ -337,7 +337,7 @@ clippor_selection_handler_get_mime_types(ClipporSelection *self)
 }
 
 static GInputStream *
-clippor_selection_handler_get_data(
+clippor_selection_handler_get_data_stream(
     ClipporSelection *self, const char *mime_type, GError **error
 )
 {
@@ -360,7 +360,7 @@ clippor_selection_handler_get_data(
     {
         g_set_error(
             error, CLIPPOR_SELECTION_ERROR, CLIPPOR_SELECTION_ERROR_CLEARED,
-            "Selection is cleared"
+            "Failed creating input stream: Selection is cleared"
         );
         return NULL;
     }

@@ -36,7 +36,7 @@ struct _ClipporSelectionClass
     GObjectClass parent_class;
 
     GPtrArray *(*get_mime_types)(ClipporSelection *self);
-    GInputStream *(*get_data)(
+    GInputStream *(*get_data_stream)(
         ClipporSelection *self, const char *mime_type, GError **error
     );
     gboolean (*update)(
@@ -48,7 +48,7 @@ struct _ClipporSelectionClass
 };
 
 GPtrArray *clippor_selection_get_mime_types(ClipporSelection *self);
-GInputStream *clippor_selection_get_data(
+GInputStream *clippor_selection_get_data_stream(
     ClipporSelection *self, const char *mime_type, GError **error
 );
 gboolean clippor_selection_update(

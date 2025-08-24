@@ -275,9 +275,6 @@ selection_data_async_callback(
 
     ssize_t r = g_input_stream_read_finish(stream, result, &error);
 
-    const char *mime_type =
-        cb->receive_ctx.mime_types->pdata[cb->receive_ctx.index];
-
     if (r == -1)
     {
         // An error occured or operation was cancelled
@@ -287,6 +284,9 @@ selection_data_async_callback(
     }
     else if (r == 0)
     {
+        const char *mime_type =
+            cb->receive_ctx.mime_types->pdata[cb->receive_ctx.index];
+
         g_clear_object(&stream);
         // EOF recieved, go onto next mime type if possible
         cb->receive_ctx.index++;
@@ -317,7 +317,7 @@ selection_data_async_callback(
         const char *new_mime_type =
             cb->receive_ctx.mime_types->pdata[cb->receive_ctx.index];
 
-        stream = clippor_selection_get_data(
+        stream = clippor_selection_get_data_stream(
             cb->receive_ctx.sel, new_mime_type, &error
         );
 
@@ -376,7 +376,7 @@ selection_update(ClipporSelection *sel, ClipporClipboard *cb)
 
     g_autoptr(GPtrArray) mime_types = clippor_selection_get_mime_types(sel);
     GInputStream *stream =
-        clippor_selection_get_data(sel, mime_types->pdata[0], &error);
+        clippor_selection_get_data_stream(sel, mime_types->pdata[0], &error);
 
     if (stream == NULL)
     {

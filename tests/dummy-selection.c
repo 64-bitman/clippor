@@ -58,7 +58,7 @@ dummy_selection_finalize(GObject *object)
 
 static GPtrArray *
 clippor_selection_handler_get_mime_types(ClipporSelection *self);
-static GInputStream *clippor_selection_handler_get_data(
+static GInputStream *clippor_selection_handler_get_data_stream(
     ClipporSelection *self, const char *mime_type, GError **error
 );
 static gboolean clippor_selection_handler_update(
@@ -79,7 +79,7 @@ dummy_selection_class_init(DummySelectionClass *class)
     gobject_class->finalize = dummy_selection_finalize;
 
     sel_class->get_mime_types = clippor_selection_handler_get_mime_types;
-    sel_class->get_data = clippor_selection_handler_get_data;
+    sel_class->get_data_stream = clippor_selection_handler_get_data_stream;
     sel_class->update = clippor_selection_handler_update;
     sel_class->is_owned = clippor_selection_handler_is_owned;
     sel_class->is_inert = clippor_selection_handler_is_inert;
@@ -284,7 +284,7 @@ clippor_selection_handler_get_mime_types(ClipporSelection *self)
 }
 
 static GInputStream *
-clippor_selection_handler_get_data(
+clippor_selection_handler_get_data_stream(
     ClipporSelection *self, const char *mime_type, GError **error
 )
 {

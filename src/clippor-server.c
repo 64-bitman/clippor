@@ -33,9 +33,6 @@ struct _ClipporServer
         uint name_id;
         GDBusConnection *connection;
 
-        GDBusObjectManagerServer *wayland_cts_manager;
-        GDBusObjectManagerServer *wayland_seats_manager;
-
         GDBusObjectManagerServer *clipboards_manager;
     } dbus;
 };
@@ -48,6 +45,7 @@ clippor_server_dispose(GObject *object)
     ClipporServer *self = CLIPPOR_SERVER(object);
 
     g_clear_object(&self->db);
+    g_clear_pointer(&self->context, g_main_context_unref);
     g_clear_pointer(&self->cfg, clippor_config_unref);
 
     G_OBJECT_CLASS(clippor_server_parent_class)->dispose(object);
@@ -155,14 +153,21 @@ clippor_server_start(ClipporServer *self, GError **error)
     g_assert(CLIPPOR_IS_SERVER(self));
     g_assert(error == NULL || *error == NULL);
 
+    g_debug("Starting server");
+
+    self->context = g_main_context_ref_thread_default();
+    self->loop = g_main_loop_new(self->context, FALSE);
+
+    clippor_server_start_dbus(self);
+
     if (!clippor_server_prepare(self, error))
     {
         g_prefix_error_literal(error, "Failed starting server");
+        clippor_server_stop_dbus(self);
+        g_main_context_unref(self->context);
+        g_main_loop_unref(self->loop);
         return FALSE;
     }
-
-    self->context = g_main_context_get_thread_default();
-    self->loop = g_main_loop_new(self->context, FALSE);
 
     self->signals[0] = g_unix_signal_add(
         SIGINT, (GSourceFunc)clippor_server_handle_signal, self
@@ -170,10 +175,6 @@ clippor_server_start(ClipporServer *self, GError **error)
     self->signals[1] = g_unix_signal_add(
         SIGTERM, (GSourceFunc)clippor_server_handle_signal, self
     );
-
-    g_debug("Starting server");
-
-    clippor_server_start_dbus(self);
 
     g_main_loop_run(self->loop);
     g_main_loop_unref(self->loop);
@@ -227,95 +228,6 @@ on_name_lost(
         g_main_loop_quit(server->loop);
 }
 
-static gboolean
-compare_clipboard_label(const void *a, const void *b)
-{
-    return g_str_equal(clippor_clipboard_get_label((ClipporClipboard *)a), b);
-}
-
-static gboolean
-compare_wayland_display_label(const void *a, const void *b)
-{
-    return g_str_equal(
-        wayland_connection_get_display((WaylandConnection *)a), b
-    );
-}
-
-static gboolean
-handle_add_clipboard(
-    DBusClippor *object, GDBusMethodInvocation *invocation, const char *label,
-    ClipporServer *server
-)
-{
-    // Check if clipboard with same name already exists
-    if (g_ptr_array_find_with_equal_func(
-            server->cfg->clipboards, label, compare_clipboard_label, NULL
-        ))
-    {
-        g_dbus_method_invocation_return_error(
-            invocation, SERVER_ERROR, SERVER_ERROR_OBJECT_EXISTS,
-            "Clipboard '%s' already exists", label
-        );
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-    }
-
-    ClipporClipboard *cb = clippor_clipboard_new(label);
-
-    g_ptr_array_add(server->cfg->clipboards, cb);
-
-    dbus_clippor_complete_add_clipboard(object, invocation);
-    return G_DBUS_METHOD_INVOCATION_HANDLED;
-}
-
-static gboolean
-handle_add_wayland_connection(
-    DBusClippor *object, GDBusMethodInvocation *invocation, const char *display,
-    ClipporServer *server
-)
-{
-    // Check if we support Wayland
-    if (!WAYLAND_FUNCS.available)
-    {
-        g_dbus_method_invocation_return_error_literal(
-            invocation, SERVER_ERROR, SERVER_ERROR_UNAVAILABLE,
-            "Wayland not supported"
-        );
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-    }
-
-    // Check if Wayland connection of display already exists
-    if (g_ptr_array_find_with_equal_func(
-            server->cfg->wayland_connections, display,
-            compare_wayland_display_label, NULL
-        ))
-    {
-        g_dbus_method_invocation_return_error(
-            invocation, SERVER_ERROR, SERVER_ERROR_OBJECT_EXISTS,
-            "Wayland connection '%s' already exists", display
-        );
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-    }
-
-    g_autoptr(GError) error = NULL;
-    g_autoptr(WaylandConnection) ct = WAYLAND_FUNCS.connection_new(display);
-
-    if (!WAYLAND_FUNCS.connection_start(ct, &error))
-    {
-        g_dbus_method_invocation_return_error(
-            invocation, SERVER_ERROR, SERVER_ERROR_OBJECT_CREATE, "%s",
-            error->message
-        );
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-    }
-
-    WAYLAND_FUNCS.connection_install_source(ct, server->context);
-
-    g_ptr_array_add(server->cfg->wayland_connections, g_object_ref(ct));
-
-    dbus_clippor_complete_add_wayland_connection(object, invocation);
-    return G_DBUS_METHOD_INVOCATION_HANDLED;
-}
-
 /*
  * Own the DBus name and start the service. Returns FALSE on error.
  */
@@ -360,15 +272,12 @@ clippor_server_start_dbus(ClipporServer *self)
             );
         else
         {
-            // Connect method handlers
-            g_signal_connect_object(
-                object, "handle-add-clipboard",
-                G_CALLBACK(handle_add_clipboard), self, G_CONNECT_DEFAULT
+            self->dbus.clipboards_manager = g_dbus_object_manager_server_new(
+                "/com/github/Clippor/Clipboards"
             );
-            g_signal_connect_object(
-                object, "handle-add-wayland-connection",
-                G_CALLBACK(handle_add_wayland_connection), self,
-                G_CONNECT_DEFAULT
+
+            g_dbus_object_manager_server_set_connection(
+                self->dbus.clipboards_manager, self->dbus.connection
             );
         }
 
@@ -382,10 +291,10 @@ clippor_server_stop_dbus(ClipporServer *self)
 {
     g_assert(CLIPPOR_IS_SERVER(self));
 
-    g_bus_unown_name(self->dbus.name_id);
-
-    if (self->dbus.connection != NULL)
-        g_object_unref(self->dbus.connection);
     if (self->dbus.clipboards_manager != NULL)
         g_object_unref(self->dbus.clipboards_manager);
+
+    g_bus_unown_name(self->dbus.name_id);
+    if (self->dbus.connection != NULL)
+        g_object_unref(self->dbus.connection);
 }

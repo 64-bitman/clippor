@@ -2,6 +2,16 @@
 
 #include <glib-object.h>
 #include <glib.h>
+#include <stdint.h>
+
+typedef enum
+{
+    CLIPPOR_ENTRY_FLAG_NONE = 0,
+    CLIPPOR_ENTRY_FLAG_STARRED = 1 << 0,
+    CLIPPOR_ENTRY_FLAG_SENSITIVE = 1 << 1
+} ClipporEntryBitFlags;
+
+typedef uint32_t ClipporEntryFlags;
 
 G_DECLARE_FINAL_TYPE(ClipporEntry, clippor_entry, CLIPPOR, ENTRY, GObject)
 #define CLIPPOR_TYPE_ENTRY (clippor_entry_get_type())
@@ -10,7 +20,7 @@ typedef struct _ClipporClipboard ClipporClipboard;
 
 ClipporEntry *clippor_entry_new_full(
     const char *cb_label, const char *id, int64_t creation_time,
-    int64_t last_used_time, gboolean starred
+    int64_t last_used_time, ClipporEntryFlags flags
 );
 ClipporEntry *clippor_entry_new(ClipporClipboard *cb);
 
@@ -24,4 +34,4 @@ const char *clippor_entry_get_clipboard(ClipporEntry *self);
 int64_t clippor_entry_get_creation_time(ClipporEntry *self);
 int64_t clippor_entry_get_last_used_time(ClipporEntry *self);
 const char *clippor_entry_get_id(ClipporEntry *self);
-gboolean clippor_entry_is_starred(ClipporEntry *self);
+ClipporEntryFlags clippor_entry_get_flags(ClipporEntry *self);

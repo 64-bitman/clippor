@@ -191,20 +191,24 @@ skip_clipboards:;
                     seat_obj, CLIPPOR_SELECTION_TYPE_REGULAR
                 );
 
-                for (uint r = 0; r < self->clipboards->len; r++)
+                if (sel != NULL)
                 {
-                    ClipporClipboard *cb = self->clipboards->pdata[r];
-                    if (g_strcmp0(
-                            clippor_clipboard_get_label(cb), cb_label.u.str.ptr
-                        ) == 0)
+                    for (uint r = 0; r < self->clipboards->len; r++)
                     {
-                        clippor_clipboard_connect_selection(
-                            cb, CLIPPOR_SELECTION(sel)
-                        );
-                        break;
+                        ClipporClipboard *cb = self->clipboards->pdata[r];
+                        if (g_strcmp0(
+                                clippor_clipboard_get_label(cb),
+                                cb_label.u.str.ptr
+                            ) == 0)
+                        {
+                            clippor_clipboard_connect_selection(
+                                cb, CLIPPOR_SELECTION(sel)
+                            );
+                            break;
+                        }
                     }
+                    g_object_unref(sel);
                 }
-                g_object_unref(sel);
             }
 
             if (primary.type != TOML_UNKNOWN)
@@ -221,21 +225,25 @@ skip_clipboards:;
                     seat_obj, CLIPPOR_SELECTION_TYPE_PRIMARY
                 );
 
-                for (uint r = 0; r < self->clipboards->len; r++)
+                if (sel != NULL)
                 {
-                    ClipporClipboard *cb = self->clipboards->pdata[r];
-                    if (g_strcmp0(
-                            clippor_clipboard_get_label(cb), cb_label.u.str.ptr
-                        ) == 0)
+                    for (uint r = 0; r < self->clipboards->len; r++)
                     {
-                        clippor_clipboard_connect_selection(
-                            cb, CLIPPOR_SELECTION(sel)
-                        );
-                        break;
+                        ClipporClipboard *cb = self->clipboards->pdata[r];
+                        if (g_strcmp0(
+                                clippor_clipboard_get_label(cb),
+                                cb_label.u.str.ptr
+                            ) == 0)
+                        {
+                            clippor_clipboard_connect_selection(
+                                cb, CLIPPOR_SELECTION(sel)
+                            );
+                            break;
+                        }
                     }
-                }
 
-                g_object_unref(sel);
+                    g_object_unref(sel);
+                }
             }
         }
     }

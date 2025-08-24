@@ -27,7 +27,9 @@ typedef enum
 {
     CLIPPOR_DATABASE_DEFAULT = 0,
     CLIPPOR_DATABASE_IN_MEMORY = 1 << 0
-} ClipporDatabaseFlags;
+} ClipporDatabaseBitFlags;
+
+typedef uint32_t ClipporDatabaseFlags;
 
 ClipporDatabase *
 clippor_database_new(const char *data_directory, uint flags, GError **error);
@@ -45,6 +47,9 @@ ClipporEntry *clippor_database_deserialize_entry_at_index(
 );
 ClipporEntry *clippor_database_deserialize_entry_with_id(
     ClipporDatabase *self, const char *id, GError **error
+);
+GPtrArray *clippor_database_deserialize_entries(
+    ClipporDatabase *self, int64_t start, int64_t end, GError **error
 );
 gboolean clippor_database_trim_entries(
     ClipporDatabase *self, const char *cb, int64_t n, GError **error

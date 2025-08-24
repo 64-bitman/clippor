@@ -16,7 +16,7 @@ struct _ClipporEntry
     char *id;
     int64_t creation_time;
     int64_t last_used_time;
-    gboolean starred;
+    ClipporEntryFlags flags;
 
     GHashTable *mime_types; // Each key is a mime type and the value is a GBytes
                             // object containing the data
@@ -67,7 +67,7 @@ clippor_entry_init(ClipporEntry *self)
 ClipporEntry *
 clippor_entry_new_full(
     const char *cb_label, const char *id, int64_t creation_time,
-    int64_t last_used_time, gboolean starred
+    int64_t last_used_time, ClipporEntryFlags flags
 )
 {
     g_assert(cb_label != NULL);
@@ -81,7 +81,7 @@ clippor_entry_new_full(
     entry->id = g_strdup(id);
     entry->creation_time = creation_time;
     entry->last_used_time = last_used_time;
-    entry->starred = starred;
+    entry->flags = flags;
 
     return entry;
 }
@@ -105,7 +105,7 @@ clippor_entry_new(ClipporClipboard *cb)
     const char *id = g_checksum_get_string(checksum);
 
     return clippor_entry_new_full(
-        label, id, creation_time, creation_time, FALSE
+        label, id, creation_time, creation_time, CLIPPOR_ENTRY_FLAG_NONE
     );
 }
 
@@ -186,10 +186,10 @@ clippor_entry_get_id(ClipporEntry *self)
     return self->id;
 }
 
-gboolean
-clippor_entry_is_starred(ClipporEntry *self)
+ClipporEntryFlags
+clippor_entry_get_flags(ClipporEntry *self)
 {
     g_assert(CLIPPOR_IS_ENTRY(self));
 
-    return self->starred;
+    return self->flags;
 }

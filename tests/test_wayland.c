@@ -280,7 +280,7 @@ test_wayland_selection_update(TEST_ARGS)
     g_assert_true(PTRARRAY_HAS_STR(mime_types, "text/plain;charset=utf-8"));
 
     g_autoptr(GInputStream) stream =
-        clippor_selection_get_data(sel, "text/plain", &error);
+        clippor_selection_get_data_stream(sel, "text/plain", &error);
     char buf[128] = {0};
 
     g_assert_no_error(error);
@@ -378,7 +378,7 @@ test_wayland_selection_inert(TEST_ARGS)
     );
     g_clear_error(&error);
 
-    clippor_selection_get_data(sel, "text/plain", &error);
+    clippor_selection_get_data_stream(sel, "text/plain", &error);
     g_assert_error(
         error, CLIPPOR_SELECTION_ERROR, CLIPPOR_SELECTION_ERROR_INERT
     );

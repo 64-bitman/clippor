@@ -7,6 +7,9 @@
 
 G_DEFINE_QUARK(CLIPPOR_DATABASE_ERROR, clippor_database_error)
 
+// TODO: for in memory database, use /tmp instead of a hash table. This is so we
+// can send the file path of any mime type to clients instead of using an fd.
+
 struct _ClipporDatabase
 {
     GObject parent_instance;
@@ -14,7 +17,7 @@ struct _ClipporDatabase
     char *location_dir;
     char *location;
     sqlite3 *handle;
-    uint flags;
+    ClipporDatabaseFlags flags;
 
     // Used to store the data in memory instead of inside a file if configured
     // to. Each key is a data id and its value is a GBytes.
@@ -60,7 +63,9 @@ clippor_database_init(ClipporDatabase *self G_GNUC_UNUSED)
 }
 
 ClipporDatabase *
-clippor_database_new(const char *data_directory, uint flags, GError **error)
+clippor_database_new(
+    const char *data_directory, ClipporDatabaseFlags flags, GError **error
+)
 {
     ClipporDatabase *db = g_object_new(CLIPPOR_TYPE_DATABASE, NULL);
 
@@ -118,7 +123,7 @@ clippor_database_new(const char *data_directory, uint flags, GError **error)
         "   Id CHAR(40) NOT NULL UNIQUE,"
         "   Creation_time INTEGER NOT NULL CHECK (Creation_time > 0),"
         "   Last_used_time INTEGER NOT NULL CHECK (Last_used_time > 0),"
-        "   Starred BOOLEAN,"
+        "   Flags INTEGER NOT NULL CHECK (Flags >= 0),"
         "   Clipboard TEXT NOT NULL"
         ");"
         ""
@@ -561,10 +566,10 @@ clippor_database_serialize_entry(
     EXEC(FALSE);
 
     statement = "INSERT INTO Entries"
-                "(Id, Creation_time, Last_used_time, Starred, Clipboard)"
+                "(Id, Creation_time, Last_used_time, Flags, Clipboard)"
                 "VALUES (?, ?, ?, ?, ?)"
                 "ON CONFLICT DO UPDATE SET "
-                "Creation_time = ?, Last_used_time = ?, Starred = ?;";
+                "Creation_time = ?, Last_used_time = ?, Flags = ?;";
 
     ret = sqlite3_prepare_v2(self->handle, statement, -1, &stmt, 0);
 
@@ -583,17 +588,17 @@ clippor_database_serialize_entry(
     const char *id = clippor_entry_get_id(entry);
     int64_t creation_time = clippor_entry_get_creation_time(entry);
     int64_t last_used_time = clippor_entry_get_last_used_time(entry);
-    gboolean starred = clippor_entry_is_starred(entry);
+    ClipporEntryFlags flags = clippor_entry_get_flags(entry);
 
     sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
     sqlite3_bind_int64(stmt, 2, creation_time);
     sqlite3_bind_int64(stmt, 3, last_used_time);
-    sqlite3_bind_int(stmt, 4, starred);
+    sqlite3_bind_int(stmt, 4, flags);
     sqlite3_bind_text(stmt, 5, cb_label, -1, SQLITE_STATIC);
 
     sqlite3_bind_int64(stmt, 6, creation_time);
     sqlite3_bind_int64(stmt, 7, last_used_time);
-    sqlite3_bind_int(stmt, 8, starred);
+    sqlite3_bind_int(stmt, 8, flags);
 
     ret = sqlite3_step(stmt);
 
@@ -703,11 +708,11 @@ clippor_database_load_entry(
     const char *id = (const char *)sqlite3_column_text(stmt, 0);
     int64_t creation_time = sqlite3_column_int64(stmt, 1);
     int64_t last_used_time = sqlite3_column_int64(stmt, 2);
-    gboolean starred = sqlite3_column_int(stmt, 3);
+    ClipporEntryFlags flags = sqlite3_column_int(stmt, 3);
     const char *cb = (const char *)sqlite3_column_text(stmt, 4);
 
     ClipporEntry *entry =
-        clippor_entry_new_full(cb, id, creation_time, last_used_time, starred);
+        clippor_entry_new_full(cb, id, creation_time, last_used_time, flags);
 
     if (!clippor_database_load_mime_types(self, entry, error))
     {
@@ -732,7 +737,7 @@ clippor_database_deserialize_entry_at_index(
     g_assert(error == NULL || *error == NULL);
 
     const char *statement =
-        "SELECT Id, Creation_time, Last_used_time, Starred, Clipboard "
+        "SELECT Id, Creation_time, Last_used_time, Flags, Clipboard "
         "FROM Entries WHERE Clipboard = ? "
         "ORDER BY Position DESC LIMIT 1 OFFSET ?;";
     sqlite3_stmt *stmt;
@@ -787,7 +792,7 @@ clippor_database_deserialize_entry_with_id(
     g_assert(error == NULL || *error == NULL);
 
     const char *statement =
-        "SELECT Id, Creation_time, Last_used_time, Starred, Clipboard "
+        "SELECT Id, Creation_time, Last_used_time, Flags, Clipboard "
         "FROM Entries WHERE Id = ?;";
     sqlite3_stmt *stmt;
     int ret;
@@ -820,6 +825,25 @@ clippor_database_deserialize_entry_with_id(
         STEP_ERROR(NULL);
 
     sqlite3_finalize(stmt);
+
+    return NULL;
+}
+
+/*
+ * Return an array of entries between start and end. "start" must be less than
+ * or equal to "end". "start" must be greater than or equal to 0, and if -1 is
+ * passed for "end", it is assumed to be the index of the last entry.
+ */
+GPtrArray *
+clippor_database_deserialize_entries(
+    ClipporDatabase *self, int64_t start, int64_t end, GError **error
+)
+{
+    g_assert(CLIPPOR_IS_DATABASE(self));
+    g_assert(start <= end);
+    g_assert(start >= 0);
+    g_assert(end >= -1);
+    g_assert(error == NULL || *error == NULL);
 
     return NULL;
 }

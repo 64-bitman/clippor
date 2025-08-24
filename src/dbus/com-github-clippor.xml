@@ -2,67 +2,90 @@
 "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
 "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
-    <!-- com.github.clippor:
+    <!-- com.github.Clippor:
 
         Main interface for global operations
     -->
     <interface name="com.github.Clippor">
-        <!--
-            AddClipboard:
-            @label: Label of new clipboard
-
-            Creates a new clipboard with given label. Note that the new
-            clipboard will be lost when the clippor process exits.
-        -->
-        <method name="AddClipboard">
-            <arg direction="in" type="s" name="label"/>
-        </method>
-        <!--
-            AddWaylandConnection:
-            @display: Wayland display to connect to
-
-            Creates a new Wayland connection for the given display. If the
-            clippor process doesn't have Wayland support compiled in, then
-            an error will be returned.
-        -->
-        <method name="AddWaylandConnection">
-            <arg direction="in" type="s" name="display"/>
-        </method>
     </interface>
 
-    <!-- com.github.Clippor.WaylandConnections
+    <!-- com.github.Clippor.Clipboard
 
-        Interface representing a single Wayland connection
+        Interface describing a clipboard
     -->
-    <interface name="com.github.Clippor.WaylandConnection">
+    <interface name="com.github.Clippor.Clipboard">
         <!--
-            Remove:
+            ListEntries:
+            @start: Index from most recent entry, to start from.
+            @number: Number of entries to return
+            @entries: Array of entries, where each entry is a dictionary
+            containg key-value pairs of information about it.
 
-            Removes the Wayland connection
+            List given amount of entries for clipboard. The number of entries
+            returned may be less than the request amount if there is not enough.
+
+            Possible key value pairs:
+
+            "id": "s"
+            Id of the entry as a string
+
+            "mime_types": "a{ss}"
+            Dictionary of mime types. Each key is a mime type and its value is a
+            file path leading to the data.
+
+            "creation_time": "x"
+            Time when entry was created, represented as the number of
+            microseconds since UNIX time.
+
+            "last_used_time": "x"
+            Same as "creation_time", but represents when the entry was most
+            recently used/accessed.
+
+            "flags": "u"
+            Integer containing bitflags. See clippor-entry.h for possible
+            values.
+
+            "clipboard": "s"
+            Name of clipboard entry is associated with.
         -->
-        <method name="Remove"/>
+        <method name="ListEntries">
+            <arg direction="in" type="x" name="start"/>
+            <arg direction="in" type="x" name="number"/>
+            <arg direction="out" type="aa{sv}" name="entries"/>
+        </method>
         <!--
-            Restart:
+            ModifyEntry:
+            @id: Id of entry as a string
+            @operations: Operation(s) to perform on entry
 
-            Restarts the Wayland connection, useful if connection went down but
-            now is up.
+            Modifies the given entry using information given in "operations",
+            which is a dictionary where each key is the operation name, and the
+            value is any required data needed with it.
+
+            Possible operations:
+
+            "remove_mime_types": "as"
+            List of mime types to remove from the entry, including any data
+            associated with it.
+
+            "add_mime_types": "a{ss}"
+            Dictionary of mime types where each key is a mime type and its value
+            is a path to a file containing the data for it. If a mime type
+            already exists in the entry, then the data it points to will be
+            updated.
+
+            "update": "(sv)"
+            Updates the given property:
+                "last_used_time": "i"
+                Should be in microseconds since UNIX time. If zero is passed then
+                the clippor daemon calculates the current time.
+                "starred": "b"
+                If entry is starred or not.
+
         -->
-        <method name="Restart"/>
-    </interface>
-
-    <!-- com.github.Clippor.WaylandConnections
-
-        Interface representing a single Wayland selection for a seat
-    -->
-    <interface name="com.github.Clippor.WaylandConnections.SeatSelection">
-        <!--
-            Connect:
-            @clipboard: Clipboard to connect the selection to
-
-            Connects the selection to the given clipboard.
-        -->
-        <method name="Connect">
-            <arg direction="in" type="s" name="clipboard"/>
+        <method name="ModifyEntry">
+            <arg direction="in" type="s" name="id"/>
+            <arg direction="in" type="a{sv}" name="operations"/>
         </method>
     </interface>
 </node>

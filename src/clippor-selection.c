@@ -160,7 +160,7 @@ clippor_selection_get_mime_types(ClipporSelection *self)
  * allows for reading data to be asynchronous.
  */
 GInputStream *
-clippor_selection_get_data(
+clippor_selection_get_data_stream(
     ClipporSelection *self, const char *mime_type, GError **error
 )
 {
@@ -168,7 +168,7 @@ clippor_selection_get_data(
     g_assert(mime_type != NULL);
 
     ClipporSelectionClass *class = CLIPPOR_SELECTION_GET_CLASS(self);
-    return class->get_data(self, mime_type, error);
+    return class->get_data_stream(self, mime_type, error);
 }
 
 /*
