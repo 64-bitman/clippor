@@ -186,7 +186,7 @@ clippor_server_start(ClipporServer *self, GError **error)
 static void
 on_bus_acquired(
     GDBusConnection *connection, const gchar *name G_GNUC_UNUSED,
-    gpointer user_data
+    void *user_data
 )
 {
     ClipporServer *server = user_data;
@@ -200,7 +200,7 @@ on_bus_acquired(
 static void
 on_name_acquired(
     GDBusConnection *connection G_GNUC_UNUSED, const gchar *name,
-    gpointer user_data
+    void *user_data
 )
 {
     ClipporServer *server = user_data;
@@ -215,7 +215,7 @@ on_name_acquired(
 static void
 on_name_lost(
     GDBusConnection *connection G_GNUC_UNUSED, const gchar *name,
-    gpointer user_data
+    void *user_data
 )
 {
     ClipporServer *server = user_data;

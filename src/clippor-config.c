@@ -133,7 +133,16 @@ skip_clipboards:;
         if (seats.type != TOML_UNKNOWN && seats.type != TOML_ARRAY)
             TOML_ERROR("Array 'seats' in 'wayland_displays' is not an array");
 
-        WaylandConnection *ct = WAYLAND_FUNCS.connection_new(display.u.str.ptr);
+        const char *actual_display = display.u.str.ptr;
+
+        // Expand env var
+        if (actual_display[0] == '$')
+            actual_display = g_getenv(actual_display + 1);
+
+        if (actual_display == NULL)
+            continue;
+
+        WaylandConnection *ct = WAYLAND_FUNCS.connection_new(actual_display);
 
         if (!WAYLAND_FUNCS.connection_start(ct, NULL))
         {
@@ -174,8 +183,17 @@ skip_clipboards:;
             if (primary.type != TOML_UNKNOWN && primary.type != TOML_TABLE)
                 TOML_ERROR("Table 'primary' in 'seat' is not a table");
 
+            const char *actual_seat = name.u.str.ptr;
+
+            // Expand env var
+            if (actual_seat[0] == '$')
+                actual_seat = g_getenv(actual_seat + 1);
+
+            if (actual_seat == NULL)
+                continue;
+
             g_autoptr(WaylandSeat) seat_obj =
-                WAYLAND_FUNCS.connection_get_seat(ct, name.u.str.ptr);
+                WAYLAND_FUNCS.connection_get_seat(ct, actual_seat);
 
             if (regular.type != TOML_UNKNOWN)
             {

@@ -8,6 +8,22 @@
 
 G_DEFINE_QUARK(CLIPPOR_CLIPBOARD_ERROR, clippor_clipboard_error)
 
+// Holds important info when receiving data from a selection
+typedef struct
+{
+    ClipporClipboard *cb;
+    ClipporSelection *sel;
+    ClipporEntry *entry;
+
+    GPtrArray *mime_types;
+
+    uint8_t buf[4096];
+    GByteArray *data;
+    uint index;
+
+    GCancellable *cancellable; // Same as the one in the clipboard
+} ReceiveContext;
+
 struct _ClipporClipboard
 {
     GObject parent_instance;
@@ -20,23 +36,10 @@ struct _ClipporClipboard
 
     char *id; // Id of current entry
 
-    // Context used when receiving data
-    struct
-    {
-        ClipporSelection *sel;
-
-        uint8_t buf[4096];
-        GByteArray *arr;
-        GCancellable *cancel;
-
-        GPtrArray *mime_types;
-        uint index;
-    } receive_ctx;
-    gboolean receiving;
-
     ClipporEntry *entry; // Current entry that all selections are set to
 
-    GCancellable *cancellable; // Cancellable used for all input streams
+    GCancellable *cancellable; // Used to cancel the current data receive
+                               // operation
 };
 
 G_DEFINE_TYPE(ClipporClipboard, clippor_clipboard, G_TYPE_OBJECT)
@@ -176,7 +179,6 @@ clippor_clipboard_update_selections(
     g_assert(CLIPPOR_IS_CLIPBOARD(self));
     g_assert(sel == NULL || CLIPPOR_IS_SELECTION(sel));
 
-    // Update selections
     for (uint i = 0; i < self->selections->len; i++)
     {
         ClipporSelection *s = self->selections->pdata[i];
@@ -265,95 +267,92 @@ selection_data_received(ClipporSelection *sel, ClipporClipboard *cb)
 }
 
 static void
-selection_data_async_callback(
-    GObject *object, GAsyncResult *result, void *user_data
+selection_data_async_ready_callback(
+    GInputStream *stream, GAsyncResult *result, ReceiveContext *ctx
 )
 {
-    GInputStream *stream = G_INPUT_STREAM(object);
-    ClipporClipboard *cb = user_data;
-    GError *error = NULL;
+    g_autoptr(GError) error = NULL;
 
     ssize_t r = g_input_stream_read_finish(stream, result, &error);
 
     if (r == -1)
     {
-        // An error occured or operation was cancelled
-        if (error->code != G_IO_ERROR_CANCELLED)
-            g_debug("Input stream did not finish properly: %s", error->message);
+        // An error occured (ex. we got cancelled)
+        if (error->code == G_IO_ERROR_CANCELLED)
+            g_debug(
+                "Data receive operation cancelled for clipboard '%s'",
+                ctx->cb->label
+            );
+        else
+            g_warning(
+                "Data receive operation failed for clipboard '%s'",
+                ctx->cb->label
+            );
         goto fail;
     }
     else if (r == 0)
     {
-        const char *mime_type =
-            cb->receive_ctx.mime_types->pdata[cb->receive_ctx.index];
+        // EOF received
+        const char *mime_type = ctx->mime_types->pdata[ctx->index];
+        GBytes *bytes = g_byte_array_free_to_bytes(ctx->data);
 
-        g_clear_object(&stream);
-        // EOF recieved, go onto next mime type if possible
-        cb->receive_ctx.index++;
-
-        GBytes *bytes = g_byte_array_free_to_bytes(cb->receive_ctx.arr);
-
-        cb->receive_ctx.arr = NULL;
-
-        clippor_entry_add_mime_type(cb->entry, mime_type, bytes);
+        clippor_entry_add_mime_type(ctx->entry, mime_type, bytes);
         g_bytes_unref(bytes);
 
-        if (cb->receive_ctx.index == cb->receive_ctx.mime_types->len)
+        if (ctx->index + 1 >= ctx->mime_types->len)
         {
-            // Received all mime types, we are done
-            cb->receiving = FALSE;
+            // We are finished
+            if (ctx->cb->entry != NULL)
+                g_object_unref(ctx->cb->entry);
+            ctx->cb->entry = ctx->entry;
 
-            selection_data_received(cb->receive_ctx.sel, cb);
-
-            g_ptr_array_unref(cb->receive_ctx.mime_types);
-            g_object_unref(cb->receive_ctx.cancel);
-            g_object_unref(cb->receive_ctx.sel);
-            g_object_unref(cb);
-
-            return;
+            selection_data_received(ctx->sel, ctx->cb);
+            goto bail;
         }
+        // Go onto next mime type
+        ctx->index++;
 
-        // Reinitialize values to use new mime type and get input stream for it
-        const char *new_mime_type =
-            cb->receive_ctx.mime_types->pdata[cb->receive_ctx.index];
-
-        stream = clippor_selection_get_data_stream(
-            cb->receive_ctx.sel, new_mime_type, &error
+        GInputStream *new_stream = clippor_selection_get_data_stream(
+            ctx->sel, ctx->mime_types->pdata[ctx->index], &error
         );
 
-        if (stream == NULL)
+        if (new_stream == NULL)
         {
-            g_debug("Failed creating input stream: %s", error->message);
-            goto fail;
+            g_warning("Selection update failed: %s", error->message);
+            g_object_unref(ctx->entry);
+            goto bail;
         }
-        else
-            cb->receive_ctx.arr = g_byte_array_new();
+
+        ctx->data = g_byte_array_new();
+
+        g_object_unref(stream);
+        stream = new_stream;
     }
     else
         // Still more data to receive
-        g_byte_array_append(cb->receive_ctx.arr, cb->receive_ctx.buf, r);
+        g_byte_array_append(ctx->data, ctx->buf, r);
 
     g_input_stream_read_async(
-        stream, cb->receive_ctx.buf, 4096, G_PRIORITY_HIGH,
-        cb->receive_ctx.cancel, selection_data_async_callback, cb
+        stream, ctx->buf, 4096, G_PRIORITY_HIGH, ctx->cb->cancellable,
+        (GAsyncReadyCallback)selection_data_async_ready_callback, ctx
     );
 
     return;
+
 fail:
-    cb->receiving = FALSE;
-    g_error_free(error);
-    g_clear_object(&stream);
+    g_object_unref(ctx->entry);
+    g_byte_array_unref(ctx->data);
+bail:
+    // Only want to set it to NULL if it hasn't already been replaced
+    if (ctx->cb->cancellable == ctx->cancellable)
+        ctx->cb->cancellable = NULL;
 
-    // Clean out any progress we made
-    g_clear_object(&cb->entry);
-
-    if (cb->receive_ctx.arr != NULL)
-        g_byte_array_unref(cb->receive_ctx.arr);
-    g_ptr_array_unref(cb->receive_ctx.mime_types);
-
-    g_object_unref(cb->receive_ctx.cancel);
-    g_object_unref(cb->receive_ctx.sel);
-    g_object_unref(cb);
+    g_object_unref(stream);
+    g_object_unref(ctx->sel);
+    g_object_unref(ctx->cb);
+    g_object_unref(ctx->cancellable);
+    g_ptr_array_unref(ctx->mime_types);
+    g_free(ctx);
 }
 
 /*
@@ -362,47 +361,43 @@ fail:
 static void
 selection_update(ClipporSelection *sel, ClipporClipboard *cb)
 {
-    GError *error = NULL;
-
-    // Check if we are already receiving data, if so cancel it
-    if (cb->receiving)
-    {
-        g_cancellable_cancel(cb->receive_ctx.cancel);
-
-        // Cancellable in GIO is async, so iterate the context
-        while (cb->receiving)
-            g_main_context_iteration(g_main_context_get_thread_default(), TRUE);
-    }
-
+    g_autoptr(GError) error = NULL;
     g_autoptr(GPtrArray) mime_types = clippor_selection_get_mime_types(sel);
+
+    if (mime_types->len <= 0)
+        return;
+
     GInputStream *stream =
         clippor_selection_get_data_stream(sel, mime_types->pdata[0], &error);
 
     if (stream == NULL)
     {
-        g_assert(error != NULL);
         g_warning("Selection update failed: %s", error->message);
-        g_error_free(error);
         return;
     }
 
-    // Create a new entry to store the mime types.
-    if (cb->entry != NULL)
-        g_object_unref(cb->entry);
+    // Check if we are in the middle of an existing operation, if so then cancel
+    // it.
+    if (cb->cancellable != NULL)
+        g_cancellable_cancel(cb->cancellable);
 
-    cb->entry = clippor_entry_new(cb);
+    ReceiveContext *ctx = g_new(ReceiveContext, 1);
 
-    cb->receive_ctx.sel = g_object_ref(sel);
-    cb->receive_ctx.cancel = g_cancellable_new();
-    cb->receive_ctx.mime_types = g_ptr_array_ref(mime_types);
-    cb->receive_ctx.index = 0;
-    cb->receive_ctx.arr = g_byte_array_new();
-    cb->receiving = TRUE;
+    ctx->cb = g_object_ref(cb);
+    ctx->sel = g_object_ref(sel);
+    ctx->entry = clippor_entry_new(cb);
 
-    // Start receiving data async
+    ctx->mime_types = g_ptr_array_ref(mime_types);
+
+    ctx->data = g_byte_array_new();
+    ctx->index = 0;
+
+    cb->cancellable = g_cancellable_new();
+    ctx->cancellable = cb->cancellable;
+
     g_input_stream_read_async(
-        stream, cb->receive_ctx.buf, 4096, G_PRIORITY_HIGH,
-        cb->receive_ctx.cancel, selection_data_async_callback, g_object_ref(cb)
+        stream, ctx->buf, 4096, G_PRIORITY_HIGH, cb->cancellable,
+        (GAsyncReadyCallback)selection_data_async_ready_callback, ctx
     );
 }
 

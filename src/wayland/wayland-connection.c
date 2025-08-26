@@ -914,7 +914,7 @@ wayland_data_device_wrap_offer_proxy(WaylandDataDevice *self, void *proxy)
 
     offer->proxy = proxy;
     offer->protocol = self->protocol;
-    offer->mime_types = g_ptr_array_new_with_free_func(g_free);
+    offer->mime_types = g_ptr_array_new_full(10, g_free);
 
     return offer;
 }
@@ -944,7 +944,7 @@ WAYLAND_DATA_PROXY_DESTROY(source, WaylandDataSource)
 void
 wayland_data_offer_destroy(WaylandDataOffer *self)
 {
-    if (self == ((void *)0))
+    if (self == NULL)
         return;
 
     g_assert(wayland_data_offer_is_valid(self));

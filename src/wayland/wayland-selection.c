@@ -15,7 +15,6 @@ struct _WaylandSelection
     WaylandDataOffer *offer;
 
     WaylandDataSource *source;
-    gboolean is_source; // If we are the source client right now
 
     gboolean active;
 };
@@ -189,18 +188,20 @@ data_source_listener_event_send(
 
 /*
  * Called when there is a new source client. Let them be the source until the
- * selection is cleared or becomes empty, such as when the sourceclient exits.
+ * selection is cleared or becomes empty, such as when the source client exits.
  */
 static void
 data_source_listener_event_cancelled(void *data, WaylandDataSource *source)
 {
     WaylandSelection *wsel = data;
 
-    // "source" may be different from "wsel->source", such as when we replace
-    // the existing data source with a new data source.
     wayland_data_source_destroy(source);
-    wsel->source = NULL;
-    wsel->is_source = FALSE;
+
+    // Only set it to NULL if it is the same, because if we set the selection,
+    // we will receive the cancelled event, and we don't want to discard the
+    // source we just set by setting it to NULL.
+    if (wsel->source == source)
+        wsel->source = NULL;
 }
 
 static const WaylandDataSourceListener data_source_listener = {
@@ -210,21 +211,14 @@ static const WaylandDataSourceListener data_source_listener = {
 
 /*
  * Become the source client for the selection, using the currently set entry. If
- * the hash table is NULL, clear the selection.
+ * the entry is NULL, clear the selection.
  */
-static gboolean
-wayland_selection_own(WaylandSelection *self, GError **error)
+static void
+wayland_selection_own(WaylandSelection *self)
 {
     ClipporEntry *entry = clippor_selection_get_entry(CLIPPOR_SELECTION(self));
 
-    // if there are no mime types in entry then just clear the selection
-    if (entry != NULL &&
-        g_hash_table_size(clippor_entry_get_mime_types(entry)) == 0)
-    {
-        self->source = NULL;
-        g_object_set(self, "entry", NULL, NULL);
-    }
-    else if (entry != NULL)
+    if (entry != NULL)
     {
         WaylandDataDeviceManager *manager =
             wayland_seat_get_data_device_manager(self->seat);
@@ -243,8 +237,6 @@ wayland_selection_own(WaylandSelection *self, GError **error)
 
         while (g_hash_table_iter_next(&iter, (void **)&mime_type, NULL))
             wayland_data_source_offer(self->source, mime_type);
-
-        self->is_source = TRUE;
     }
     else
         self->source = NULL;
@@ -256,16 +248,9 @@ wayland_selection_own(WaylandSelection *self, GError **error)
 
     wayland_data_device_set_selection(device, self->source, type);
 
-    if (!wayland_connection_roundtrip(
-            wayland_seat_get_connection(self->seat), error
-        ))
-    {
-        g_prefix_error_literal(error, "Failed setting selection: ");
-        wayland_data_source_destroy(self->source);
-        return FALSE;
-    }
-
-    return TRUE;
+    // Let the context process/flush events and buffer. This avoids situations
+    // where we start trying to receive data from an offer that is replaced
+    // right after with the one from the source we set here.
 }
 
 /*
@@ -286,7 +271,7 @@ wayland_selection_new_offer(WaylandSelection *self, WaylandDataOffer *offer)
     // Destroy previous offer and resources associated with it
     wayland_data_offer_destroy(self->offer);
 
-    if (self->is_source)
+    if (self->source != NULL)
     {
         // We are the source client, ignore and destroy the offer
         wayland_data_offer_destroy(offer);
@@ -306,14 +291,7 @@ wayland_selection_new_offer(WaylandSelection *self, WaylandDataOffer *offer)
         if (entry == NULL)
             return;
 
-        GError *error = NULL;
-
-        if (!wayland_selection_own(self, &error))
-        {
-            g_warning("Failed setting Wayland selection: %s", error->message);
-            g_error_free(error);
-            return;
-        }
+        wayland_selection_own(self);
     }
     else
         g_signal_emit_by_name(CLIPPOR_SELECTION(self), "update");
@@ -383,8 +361,6 @@ clippor_selection_handler_get_data_stream(
             wayland_seat_get_connection(wsel->seat), error
         ))
     {
-        g_prefix_error_literal(error, "Failed flushing Wayland connection: ");
-
         close(fds[0]);
         return FALSE;
     }
@@ -416,18 +392,16 @@ clippor_selection_handler_update(
     {
         g_set_error(
             error, CLIPPOR_SELECTION_ERROR, CLIPPOR_SELECTION_ERROR_INERT,
-            "Failed setting selection: Selection is inert"
+            "Failed updating Wayland selection: Selection is inert"
         );
         return FALSE;
     }
 
     g_object_set(wsel, "entry", entry, NULL);
 
-    if (!is_source && !wayland_selection_own(wsel, error))
-    {
-        g_prefix_error_literal(error, "Failed updating Wayland selection: ");
-        return FALSE;
-    }
+    // Obviously don't want to set the selection again right after we set it...
+    if (!is_source)
+        wayland_selection_own(wsel);
 
     return TRUE;
 }
