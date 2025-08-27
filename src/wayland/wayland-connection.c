@@ -1,6 +1,5 @@
 #include "wayland-connection.h"
 #include "ext-data-control-v1.h"
-#include "globals.h"
 #include "wayland-seat.h"
 #include "wlr-data-control-unstable-v1.h"
 #include <wayland-client.h>
@@ -1118,7 +1117,7 @@ static const struct zwlr_data_control_source_v1_listener
     )                                                                          \
     {                                                                          \
         WaylandDataOffer *self = data;                                         \
-        if (strcmp(mime_type, CLIPPOR_IDENTIFIER) == 0)                        \
+        if (strcmp(mime_type, "application/x-clippor-instance") == 0)          \
             self->from_clippor = TRUE;                                         \
         if (self->listener->offer(self->data, self, mime_type))                \
             g_ptr_array_add(self->mime_types, g_strdup(mime_type));            \

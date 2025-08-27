@@ -1,5 +1,4 @@
 #include "clippor-server.h"
-#include "globals.h"
 #include "modules.h"
 #include <glib.h>
 
@@ -8,8 +7,6 @@ static gboolean opt_debug;
 
 static char *opt_config_file;
 static char *opt_data_dir;
-
-char *CLIPPOR_IDENTIFIER;
 
 static GOptionEntry entries[] = {
     {"version", 'v', 0, G_OPTION_ARG_NONE, &opt_version, "Show version", NULL},
@@ -47,9 +44,6 @@ main(int argc, char **argv)
 
     modules_init();
 
-    CLIPPOR_IDENTIFIER =
-        g_strdup_printf("application/x-clippor-instance-%d", getpid());
-
     g_autoptr(ClipporConfig) cfg;
     g_autoptr(ClipporDatabase) db;
 
@@ -85,8 +79,6 @@ main(int argc, char **argv)
 
     // Make sure this is always called last to avoid bugs
     modules_uninit();
-
-    g_free(CLIPPOR_IDENTIFIER);
 
     return EXIT_SUCCESS;
 }

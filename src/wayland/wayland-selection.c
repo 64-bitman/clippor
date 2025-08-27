@@ -1,5 +1,4 @@
 #include "wayland-selection.h"
-#include "globals.h"
 #include "wayland-connection.h"
 #include <gio/gunixinputstream.h>
 #include <gio/gunixoutputstream.h>
@@ -19,8 +18,7 @@ struct _WaylandSelection
 
     gboolean active;
 
-    gboolean done_starting;
-    uint serial;
+    uint idle_source_id; // ID of idle source that will set the selection
 };
 
 G_DEFINE_TYPE(WaylandSelection, wayland_selection, CLIPPOR_TYPE_SELECTION)
@@ -244,7 +242,9 @@ wayland_selection_own(WaylandSelection *self)
 
         // This is used to identify selections coming from us and ones coming
         // from other clients
-        wayland_data_source_offer(self->source, CLIPPOR_IDENTIFIER);
+        wayland_data_source_offer(
+            self->source, "application/x-clippor-instance"
+        );
     }
     else
         self->source = NULL;
@@ -255,6 +255,28 @@ wayland_selection_own(WaylandSelection *self)
     g_object_get(self, "type", &type, NULL);
 
     wayland_data_device_set_selection(device, self->source, type);
+}
+
+static gboolean
+clipboard_own(WaylandSelection *sel)
+{
+    // Only set the selection if the offer is NULL, assuring that this is an
+    // actual NULL selection event, not some temporary one.
+    if (sel->offer == NULL)
+        wayland_selection_own(sel);
+
+    sel->idle_source_id = 0;
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean
+send_update_signal(WaylandSelection *sel)
+{
+    // If the offer is NULL then we have likely set the selection, no point in
+    // sending update signal.
+    if (sel->offer != NULL)
+        g_signal_emit_by_name(sel, "update");
+    return G_SOURCE_REMOVE;
 }
 
 /*
@@ -269,6 +291,12 @@ wayland_selection_new_offer(WaylandSelection *self, WaylandDataOffer *offer)
     // Destroy previous offer and resources associated with it
     wayland_data_offer_destroy(self->offer);
 
+    if (self->idle_source_id > 0)
+    {
+        g_source_remove(self->idle_source_id);
+        self->idle_source_id = 0;
+    }
+
     if (offer != NULL && wayland_data_offer_is_from_clippor(offer))
     {
         // We are the source client, ignore and destroy the offer
@@ -280,13 +308,11 @@ wayland_selection_new_offer(WaylandSelection *self, WaylandDataOffer *offer)
         // the set_selection and the actual selection event (this). This is
         // common on startup when the selection is not empty before starting the
         // clippor process.
-        g_signal_emit_by_name(CLIPPOR_SELECTION(self), "cancel");
+        /* g_signal_emit_by_name(CLIPPOR_SELECTION(self), "cancel"); */
         return;
     }
-    self->offer = offer;
 
-    if (self->source != NULL && offer == NULL)
-        return;
+    self->offer = offer;
 
     // If offer is NULL, set the selection instead of emitting signal, only if
     // the entry is not NULL, since we would just be clearing it again
@@ -299,10 +325,41 @@ wayland_selection_new_offer(WaylandSelection *self, WaylandDataOffer *offer)
         if (entry == NULL)
             return;
 
-        wayland_selection_own(self);
+        // Don't set the selection immediatety. This is to (hopefully) avoid
+        // race conditions where a source client destroys its source (causing a
+        // NULL selection event), then actually sets the selection (causing a
+        // normal selection event). Essentially, we don't want to set the
+        // selection upon receiving that NULL selection event to the old value,
+        // because we would be racing with the actual selection set from the
+        // source client. Make sure the priority is low so that this is
+        // hopefully only triggered after all the selection events have occured.
+        //
+        // This isn't perfect, sometimes the selection events come after the
+        // idle source is triggered, especially when a large volume of selection
+        // events come in a tiny period of time. This is esspecially common with
+        // the primary selection, since some applications set the selection
+        // every time the selection changes, instead of when the user releases
+        // the mouse or something.
+        //
+        // https://gitlab.freedesktop.org/wlroots/wlr-protocols/-/issues/92
+        // Klipper solves by having the KWin compositor do some of the work, but
+        // we obviously don't have the luxury being able to have that...
+        self->idle_source_id = g_idle_add_full(
+            G_PRIORITY_LOW + 10, (GSourceFunc)clipboard_own, g_object_ref(self),
+            g_object_unref
+        );
     }
     else
-        g_signal_emit_by_name(CLIPPOR_SELECTION(self), "update");
+        // Emit the signal later on, in an attempt to avoid trying to receive
+        // from a selection that happens right after we set the selection. This
+        // can happen on startup when there is already an existing selection,
+        // and the clippor process is started. We set the selection first from
+        // the database (if any) then the selection events from the previous
+        // selection may happen right after, which we want to ignore.
+        g_idle_add_full(
+            G_PRIORITY_LOW, (GSourceFunc)send_update_signal, g_object_ref(self),
+            g_object_unref
+        );
 }
 
 static GPtrArray *

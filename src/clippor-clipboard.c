@@ -20,7 +20,6 @@ typedef struct
     uint8_t buf[4096];
     GByteArray *data;
     uint index;
-    uint cancel_sig_id;
 
     GCancellable *cancellable; // Same as the one in the clipboard
 } ReceiveContext;
@@ -368,7 +367,9 @@ finish:
         {
             g_assert(error != NULL);
 
-            g_warning("Selection update failed: %s", error->message);
+            // Make this a debug message because this can happen pretty often
+            // when many selection events come in a tiny period of time.
+            g_debug("Selection update failed: %s", error->message);
 
             g_object_unref(ctx->entry);
             goto bail;
@@ -403,19 +404,7 @@ bail:
     g_object_unref(ctx->cb);
     g_object_unref(ctx->cancellable);
     g_ptr_array_unref(ctx->mime_types);
-    g_signal_handler_disconnect(ctx->sel, ctx->cancel_sig_id);
     g_free(ctx);
-}
-
-/*
- * Called when a selection wants us to stop receiving data for this operation.
- */
-static void
-cancel_receive_op_callback(
-    ClipporSelection *sel G_GNUC_UNUSED, ReceiveContext *ctx
-)
-{
-    g_cancellable_cancel(ctx->cancellable);
 }
 
 /*
@@ -465,10 +454,6 @@ selection_update(ClipporSelection *sel, ClipporClipboard *cb)
 
     cb->cancellable = g_cancellable_new();
     ctx->cancellable = cb->cancellable;
-
-    ctx->cancel_sig_id = g_signal_connect(
-        sel, "cancel", G_CALLBACK(cancel_receive_op_callback), ctx
-    );
 
     g_input_stream_read_async(
         stream, ctx->buf, 4096, G_PRIORITY_HIGH, cb->cancellable,
