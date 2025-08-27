@@ -16,6 +16,8 @@ struct _WaylandSeat
     char *name;
     uint32_t capabilities;
 
+    char *identifier;
+
     int data_timeout;
 
     // We listen to the device and send out signals when there is a new
@@ -91,6 +93,7 @@ wayland_seat_finalize(GObject *object)
 
     wayland_seat_make_inert(self);
     g_free(self->name);
+    g_free(self->identifier);
 
     G_OBJECT_CLASS(wayland_seat_parent_class)->finalize(object);
 }
@@ -120,6 +123,7 @@ wayland_seat_class_init(WaylandSeatClass *class)
 static void
 wayland_seat_init(WaylandSeat *self G_GNUC_UNUSED)
 {
+    self->identifier = g_strdup_printf("clippor-identifier-%d", getpid());
 }
 
 static void

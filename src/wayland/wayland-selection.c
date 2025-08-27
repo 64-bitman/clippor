@@ -1,4 +1,5 @@
 #include "wayland-selection.h"
+#include "globals.h"
 #include "wayland-connection.h"
 #include <gio/gunixinputstream.h>
 #include <gio/gunixoutputstream.h>
@@ -17,6 +18,9 @@ struct _WaylandSelection
     WaylandDataSource *source;
 
     gboolean active;
+
+    gboolean done_starting;
+    uint serial;
 };
 
 G_DEFINE_TYPE(WaylandSelection, wayland_selection, CLIPPOR_TYPE_SELECTION)
@@ -170,7 +174,7 @@ data_source_listener_event_send(
     ClipporEntry *entry = clippor_selection_get_entry(CLIPPOR_SELECTION(wsel));
     GBytes *bytes = clippor_entry_get_data(entry, mime_type);
 
-    // Shouldn't happen...
+    // No such mime type
     if (bytes == NULL)
     {
         close(fd);
@@ -237,6 +241,10 @@ wayland_selection_own(WaylandSelection *self)
 
         while (g_hash_table_iter_next(&iter, (void **)&mime_type, NULL))
             wayland_data_source_offer(self->source, mime_type);
+
+        // This is used to identify selections coming from us and ones coming
+        // from other clients
+        wayland_data_source_offer(self->source, CLIPPOR_IDENTIFIER);
     }
     else
         self->source = NULL;
@@ -247,20 +255,10 @@ wayland_selection_own(WaylandSelection *self)
     g_object_get(self, "type", &type, NULL);
 
     wayland_data_device_set_selection(device, self->source, type);
-
-    // Let the context process/flush events and buffer. This avoids situations
-    // where we start trying to receive data from an offer that is replaced
-    // right after with the one from the source we set here.
 }
 
 /*
- * Set the current offer used by selection and destroy the previous if any, then
- * emit the "update" signal. The offer should be valid or NULL (if selection is
- * cleared).
- *
- * The function will take a new reference to the ptr array.
- *
- * If a NULL offer is passed then the selection is assumed to be cleared.
+ * Should be called by the parent seat when it receives a selection event.
  */
 void
 wayland_selection_new_offer(WaylandSelection *self, WaylandDataOffer *offer)
@@ -271,14 +269,24 @@ wayland_selection_new_offer(WaylandSelection *self, WaylandDataOffer *offer)
     // Destroy previous offer and resources associated with it
     wayland_data_offer_destroy(self->offer);
 
-    if (self->source != NULL)
+    if (offer != NULL && wayland_data_offer_is_from_clippor(offer))
     {
         // We are the source client, ignore and destroy the offer
         wayland_data_offer_destroy(offer);
         self->offer = NULL;
+
+        // Tell the clipboard to stop receiving data if it is. This is because
+        // we may have received a selection event from another client in betwen
+        // the set_selection and the actual selection event (this). This is
+        // common on startup when the selection is not empty before starting the
+        // clippor process.
+        g_signal_emit_by_name(CLIPPOR_SELECTION(self), "cancel");
         return;
     }
     self->offer = offer;
+
+    if (self->source != NULL && offer == NULL)
+        return;
 
     // If offer is NULL, set the selection instead of emitting signal, only if
     // the entry is not NULL, since we would just be clearing it again

@@ -20,6 +20,7 @@ typedef struct
     uint8_t buf[4096];
     GByteArray *data;
     uint index;
+    uint cancel_sig_id;
 
     GCancellable *cancellable; // Same as the one in the clipboard
 } ReceiveContext;
@@ -40,6 +41,10 @@ struct _ClipporClipboard
 
     GCancellable *cancellable; // Used to cancel the current data receive
                                // operation
+
+    GPtrArray *allowed_mime_types; // Array of GRegex objects.
+    GHashTable *mime_type_groups; // Each key is a GRegex and its value is a ptr
+                                  // array of mime types to expand to.
 };
 
 G_DEFINE_TYPE(ClipporClipboard, clippor_clipboard, G_TYPE_OBJECT)
@@ -48,6 +53,7 @@ typedef enum
 {
     PROP_LABEL = 1,
     PROP_MAX_ENTRIES,
+    PROP_ALLOWED_MIME_TYPES,
     N_PROPERTIES
 } ClipporClipboardProperty;
 
@@ -70,6 +76,11 @@ clippor_clipboard_set_property(
         // TODO: also trim entries in database as well
         self->max_entries = g_value_get_int64(value);
         break;
+    case PROP_ALLOWED_MIME_TYPES:
+        if (self->allowed_mime_types != NULL)
+            g_ptr_array_unref(self->allowed_mime_types);
+        self->allowed_mime_types = g_value_dup_boxed(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
         break;
@@ -91,6 +102,9 @@ clippor_clipboard_get_property(
     case PROP_MAX_ENTRIES:
         g_value_set_int64(value, self->max_entries);
         break;
+    case PROP_ALLOWED_MIME_TYPES:
+        g_value_set_boxed(value, self->allowed_mime_types);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
         break;
@@ -105,6 +119,7 @@ clippor_clipboard_dispose(GObject *object)
     g_clear_object(&self->db);
     g_clear_pointer(&self->selections, g_ptr_array_unref);
     g_clear_object(&self->entry);
+    g_clear_pointer(&self->allowed_mime_types, g_ptr_array_unref);
 
     G_OBJECT_CLASS(clippor_clipboard_parent_class)->dispose(object);
 }
@@ -137,6 +152,10 @@ clippor_clipboard_class_init(ClipporClipboardClass *class)
     obj_properties[PROP_MAX_ENTRIES] = g_param_spec_int64(
         "max-entries", "Max entries", "Maximum number of entries in history", 1,
         G_MAXINT64, 100, G_PARAM_READWRITE | G_PARAM_CONSTRUCT
+    );
+    obj_properties[PROP_ALLOWED_MIME_TYPES] = g_param_spec_boxed(
+        "allowed-mime-types", "Allowed mime types",
+        "Allowed mime types to store", G_TYPE_PTR_ARRAY, G_PARAM_READWRITE
     );
 
     g_object_class_install_properties(
@@ -266,6 +285,26 @@ selection_data_received(ClipporSelection *sel, ClipporClipboard *cb)
     clippor_clipboard_update_selections(cb, sel);
 }
 
+/*
+ * Return true if mime type is allowed to be stored in clipboard
+ */
+static gboolean
+clippor_clipboard_mime_type_allowed(
+    ClipporClipboard *self, const char *mime_type
+)
+{
+    if (self->allowed_mime_types == NULL)
+        return TRUE;
+    for (uint i = 0; i < self->allowed_mime_types->len; i++)
+    {
+        GRegex *regex = self->allowed_mime_types->pdata[i];
+
+        if (g_regex_match(regex, mime_type, G_REGEX_MATCH_DEFAULT, NULL))
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static void
 selection_data_async_ready_callback(
     GInputStream *stream, GAsyncResult *result, ReceiveContext *ctx
@@ -301,6 +340,7 @@ selection_data_async_ready_callback(
 
         if (ctx->index + 1 >= ctx->mime_types->len)
         {
+finish:
             // We are finished
             if (ctx->cb->entry != NULL)
                 g_object_unref(ctx->cb->entry);
@@ -309,8 +349,16 @@ selection_data_async_ready_callback(
             selection_data_received(ctx->sel, ctx->cb);
             goto bail;
         }
-        // Go onto next mime type
-        ctx->index++;
+        // Go onto next mime type (if not allowed go onto next)
+        while (ctx->index++, ctx->index < ctx->mime_types->len)
+            if (clippor_clipboard_mime_type_allowed(
+                    ctx->cb, ctx->mime_types->pdata[ctx->index]
+                ))
+                break;
+
+        // No more mime types in the list that are allowed, finish
+        if (ctx->index >= ctx->mime_types->len)
+            goto finish;
 
         GInputStream *new_stream = clippor_selection_get_data_stream(
             ctx->sel, ctx->mime_types->pdata[ctx->index], &error
@@ -318,7 +366,10 @@ selection_data_async_ready_callback(
 
         if (new_stream == NULL)
         {
+            g_assert(error != NULL);
+
             g_warning("Selection update failed: %s", error->message);
+
             g_object_unref(ctx->entry);
             goto bail;
         }
@@ -352,7 +403,19 @@ bail:
     g_object_unref(ctx->cb);
     g_object_unref(ctx->cancellable);
     g_ptr_array_unref(ctx->mime_types);
+    g_signal_handler_disconnect(ctx->sel, ctx->cancel_sig_id);
     g_free(ctx);
+}
+
+/*
+ * Called when a selection wants us to stop receiving data for this operation.
+ */
+static void
+cancel_receive_op_callback(
+    ClipporSelection *sel G_GNUC_UNUSED, ReceiveContext *ctx
+)
+{
+    g_cancellable_cancel(ctx->cancellable);
 }
 
 /*
@@ -363,12 +426,20 @@ selection_update(ClipporSelection *sel, ClipporClipboard *cb)
 {
     g_autoptr(GError) error = NULL;
     g_autoptr(GPtrArray) mime_types = clippor_selection_get_mime_types(sel);
+    uint i = 0;
 
     if (mime_types->len <= 0)
         return;
 
+    while (i < mime_types->len)
+    {
+        if (clippor_clipboard_mime_type_allowed(cb, mime_types->pdata[i]))
+            break;
+        i++;
+    }
+
     GInputStream *stream =
-        clippor_selection_get_data_stream(sel, mime_types->pdata[0], &error);
+        clippor_selection_get_data_stream(sel, mime_types->pdata[i], &error);
 
     if (stream == NULL)
     {
@@ -390,10 +461,14 @@ selection_update(ClipporSelection *sel, ClipporClipboard *cb)
     ctx->mime_types = g_ptr_array_ref(mime_types);
 
     ctx->data = g_byte_array_new();
-    ctx->index = 0;
+    ctx->index = i;
 
     cb->cancellable = g_cancellable_new();
     ctx->cancellable = cb->cancellable;
+
+    ctx->cancel_sig_id = g_signal_connect(
+        sel, "cancel", G_CALLBACK(cancel_receive_op_callback), ctx
+    );
 
     g_input_stream_read_async(
         stream, ctx->buf, 4096, G_PRIORITY_HIGH, cb->cancellable,

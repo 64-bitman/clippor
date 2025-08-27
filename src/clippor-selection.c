@@ -34,6 +34,7 @@ static GParamSpec *obj_properties[N_PROPERTIES] = {NULL};
 typedef enum
 {
     SIGNAL_UPDATE, // Emitted when there is a new selection available
+    SIGNAL_CANCEL, // Emitted to tell the clipboard to stop receiving data.
     N_SIGNALS,
 } ClipporSelectionSignal;
 
@@ -133,6 +134,11 @@ clippor_selection_class_init(ClipporSelectionClass *class)
 
     obj_signals[SIGNAL_UPDATE] = g_signal_new(
         "update", G_TYPE_FROM_CLASS(class),
+        G_SIGNAL_NO_HOOKS | G_SIGNAL_NO_RECURSE, 0, NULL, NULL, NULL,
+        G_TYPE_NONE, 0
+    );
+    obj_signals[SIGNAL_CANCEL] = g_signal_new(
+        "cancel", G_TYPE_FROM_CLASS(class),
         G_SIGNAL_NO_HOOKS | G_SIGNAL_NO_RECURSE, 0, NULL, NULL, NULL,
         G_TYPE_NONE, 0
     );

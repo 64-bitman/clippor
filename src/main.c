@@ -1,19 +1,19 @@
 #include "clippor-server.h"
+#include "globals.h"
 #include "modules.h"
 #include <glib.h>
 
 static gboolean opt_version;
 static gboolean opt_debug;
-static gboolean opt_server;
 
 static char *opt_config_file;
 static char *opt_data_dir;
 
+char *CLIPPOR_IDENTIFIER;
+
 static GOptionEntry entries[] = {
     {"version", 'v', 0, G_OPTION_ARG_NONE, &opt_version, "Show version", NULL},
     {"debug", 'd', 0, G_OPTION_ARG_NONE, &opt_debug, "Be more verbose", NULL},
-    {"server", 's', 0, G_OPTION_ARG_NONE, &opt_server, "Start the server",
-     NULL},
     {"config-file", 'c', 0, G_OPTION_ARG_STRING, &opt_config_file,
      "Configuration file to use", NULL},
     {"data-dir", 'D', 0, G_OPTION_ARG_STRING, &opt_data_dir,
@@ -24,8 +24,9 @@ static GOptionEntry entries[] = {
 int
 main(int argc, char **argv)
 {
-    GError *error = NULL;
-    GOptionContext *context = g_option_context_new(" - clipboard manager");
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GOptionContext) context =
+        g_option_context_new(" - clipboard manager");
 
     g_option_context_add_main_entries(context, entries, NULL);
 
@@ -34,55 +35,49 @@ main(int argc, char **argv)
         g_print("Option parsing failed: %s\n", error->message);
         return EXIT_FAILURE;
     }
-    g_option_context_free(context);
 
     if (opt_version)
     {
-        g_print("Clippor version " VERSION);
+        g_print("Clippor version " VERSION "\n");
         return EXIT_SUCCESS;
     }
 
     if (opt_debug)
         g_log_set_debug_enabled(TRUE);
 
-    int ret = EXIT_SUCCESS;
-
     modules_init();
 
-    if (opt_server)
+    CLIPPOR_IDENTIFIER =
+        g_strdup_printf("application/x-clippor-instance-%d", getpid());
+
+    g_autoptr(ClipporConfig) cfg;
+    g_autoptr(ClipporDatabase) db;
+
+    cfg = clippor_config_new_file(opt_config_file, &error);
+
+    if (cfg == NULL)
     {
+        g_warning("%s", error->message);
+        g_error_free(error);
+        return EXIT_FAILURE;
+    }
 
-        g_autoptr(ClipporConfig) cfg;
-        g_autoptr(ClipporDatabase) db;
+    db = clippor_database_new(opt_data_dir, CLIPPOR_DATABASE_DEFAULT, &error);
 
-        cfg = clippor_config_new_file(opt_config_file, &error);
+    if (db == NULL)
+    {
+        g_warning("%s", error->message);
+        g_error_free(error);
+        return EXIT_FAILURE;
+    }
 
-        if (cfg == NULL)
-        {
-            g_warning("%s", error->message);
-            g_error_free(error);
-            return EXIT_FAILURE;
-        }
+    g_autoptr(ClipporServer) server = clippor_server_new(cfg, db);
 
-        db = clippor_database_new(
-            opt_data_dir, CLIPPOR_DATABASE_DEFAULT, &error
-        );
-
-        if (db == NULL)
-        {
-            g_warning("%s", error->message);
-            g_error_free(error);
-            return EXIT_FAILURE;
-        }
-
-        g_autoptr(ClipporServer) server = clippor_server_new(cfg, db);
-
-        if (!clippor_server_start(server, &error))
-        {
-            g_warning("%s", error->message);
-            g_error_free(error);
-            return EXIT_FAILURE;
-        }
+    if (!clippor_server_start(server, &error))
+    {
+        g_warning("%s", error->message);
+        g_error_free(error);
+        return EXIT_FAILURE;
     }
 
     g_free(opt_config_file);
@@ -91,5 +86,7 @@ main(int argc, char **argv)
     // Make sure this is always called last to avoid bugs
     modules_uninit();
 
-    return ret;
+    g_free(CLIPPOR_IDENTIFIER);
+
+    return EXIT_SUCCESS;
 }

@@ -130,6 +130,7 @@ void wayland_data_offer_receive(
     WaylandDataOffer *self, const char *mime_type, int fd
 );
 GPtrArray *wayland_data_offer_get_mime_types(WaylandDataOffer *self);
+gboolean wayland_data_offer_is_from_clippor(WaylandDataOffer *self);
 
 // Cleanup
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(

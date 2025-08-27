@@ -1,5 +1,6 @@
 #include "wayland-connection.h"
 #include "ext-data-control-v1.h"
+#include "globals.h"
 #include "wayland-seat.h"
 #include "wlr-data-control-unstable-v1.h"
 #include <wayland-client.h>
@@ -46,6 +47,7 @@ struct WaylandDataOffer
     GPtrArray *mime_types;
     void *data;
     const WaylandDataOfferListener *listener;
+    gboolean from_clippor;
 };
 
 typedef struct
@@ -915,6 +917,7 @@ wayland_data_device_wrap_offer_proxy(WaylandDataDevice *self, void *proxy)
     offer->proxy = proxy;
     offer->protocol = self->protocol;
     offer->mime_types = g_ptr_array_new_full(10, g_free);
+    offer->from_clippor = FALSE;
 
     return offer;
 }
@@ -1115,6 +1118,8 @@ static const struct zwlr_data_control_source_v1_listener
     )                                                                          \
     {                                                                          \
         WaylandDataOffer *self = data;                                         \
+        if (strcmp(mime_type, CLIPPOR_IDENTIFIER) == 0)                        \
+            self->from_clippor = TRUE;                                         \
         if (self->listener->offer(self->data, self, mime_type))                \
             g_ptr_array_add(self->mime_types, g_strdup(mime_type));            \
     }
@@ -1248,10 +1253,23 @@ wayland_data_offer_receive(
     }
 }
 
+/*
+ * If the data offer is from ourselves when we set the selection. It is
+ * identified when it contains the mime type that is same as the
+ * clippor_identifer global variable.
+ */
 GPtrArray *
 wayland_data_offer_get_mime_types(WaylandDataOffer *self)
 {
     g_assert(wayland_data_offer_is_valid(self));
 
     return self->mime_types;
+}
+
+gboolean
+wayland_data_offer_is_from_clippor(WaylandDataOffer *self)
+{
+    g_assert(wayland_data_offer_is_valid(self));
+
+    return self->from_clippor;
 }

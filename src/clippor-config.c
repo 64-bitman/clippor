@@ -99,12 +99,40 @@ clippor_config_populate(
                 "Array 'mime_type_groups' in 'clipboards' is not an array"
             );
 
-        ClipporClipboard *cb = clippor_clipboard_new(label.u.str.ptr);
+        g_autoptr(ClipporClipboard) cb = clippor_clipboard_new(label.u.str.ptr);
 
         if (max_entries.type != TOML_UNKNOWN)
             g_object_set(cb, "max-entries", max_entries.u.int64, NULL);
 
-        g_ptr_array_add(self->clipboards, cb);
+        if (allowed_mime_types.type == TOML_ARRAY)
+        {
+            g_autoptr(GError) error = NULL;
+            g_autoptr(GPtrArray) arr =
+                g_ptr_array_new_with_free_func((GDestroyNotify)g_regex_unref);
+
+            for (int k = 0; k < allowed_mime_types.u.arr.size; k++)
+            {
+                toml_datum_t entry = allowed_mime_types.u.arr.elem[i];
+
+                if (entry.type != TOML_STRING)
+                    TOML_ERROR(
+                        "allowed_mime_types in 'clipboards' must only contain "
+                        "strings"
+                    );
+
+                GRegex *regex = g_regex_new(entry.u.str.ptr, G_REGEX_OPTIMIZE,
+                        G_REGEX_MATCH_DEFAULT, &error);
+
+                if (regex == NULL)
+                    TOML_ERROR(error->message);
+
+                g_ptr_array_add(arr, regex);
+            }
+
+            g_object_set(cb, "allowed-mime-types", arr, NULL);
+        }
+
+        g_ptr_array_add(self->clipboards, g_object_ref(cb));
     }
 
 skip_clipboards:;
@@ -142,7 +170,8 @@ skip_clipboards:;
         if (actual_display == NULL)
             continue;
 
-        WaylandConnection *ct = WAYLAND_FUNCS.connection_new(actual_display);
+        g_autoptr(WaylandConnection) ct =
+            WAYLAND_FUNCS.connection_new(actual_display);
 
         if (!WAYLAND_FUNCS.connection_start(ct, NULL))
         {
@@ -150,16 +179,15 @@ skip_clipboards:;
                 "Wayland display '%s' failed to start, ignoring",
                 display.u.str.ptr
             );
-            g_object_unref(ct);
             continue;
         }
 
-        g_ptr_array_add(self->wayland_connections, ct);
+        g_ptr_array_add(self->wayland_connections, g_object_ref(ct));
 
-        // Connect seat(s) to clipboards
         if (seats.type == TOML_UNKNOWN)
             continue;
 
+        // Connect seat(s) to clipboards
         for (int k = 0; k < seats.u.arr.size; k++)
         {
             toml_datum_t seat = seats.u.arr.elem[k];
